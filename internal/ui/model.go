@@ -9,6 +9,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
@@ -39,6 +40,13 @@ type lazygitExitedMsg struct {
 	err error
 }
 
+// outputLine represents a single line in the command output panel.
+type outputLine struct {
+	ts   string
+	text string
+	fail bool
+}
+
 type Model struct {
 	repos    []store.Repo
 	cursor   int
@@ -47,6 +55,10 @@ type Model struct {
 	status   string
 	busy     bool
 	showHelp bool
+
+	// output panel
+	output    []outputLine
+	outScroll int // index of first visible line
 
 	store     *store.Store
 	textInput textinput.Model
@@ -76,7 +88,45 @@ func NewModel() Model {
 		return m
 	}
 	m.repos = repos
+	m.logInfo(fmt.Sprintf("Loaded %d repositories", len(repos)))
 	return m
+}
+
+// logInfo appends an informational line to the output panel.
+func (m *Model) logInfo(text string) {
+	m.appendOutput(outputLine{ts: timestamp(), text: text})
+}
+
+// logSuccess appends a success line to the output panel.
+func (m *Model) logSuccess(text string) {
+	m.appendOutput(outputLine{ts: timestamp(), text: text, fail: false})
+}
+
+// logError appends a failure line to the output panel.
+func (m *Model) logError(text string) {
+	m.appendOutput(outputLine{ts: timestamp(), text: text, fail: true})
+}
+
+const maxOutputLines = 2000
+
+func (m *Model) appendOutput(line outputLine) {
+	m.output = append(m.output, line)
+	if len(m.output) > maxOutputLines {
+		m.output = m.output[len(m.output)-maxOutputLines:]
+	}
+}
+
+// scrollToBottom pins the output panel view to the last line.
+func (m *Model) scrollToBottom(visibleLines int) {
+	if len(m.output) > visibleLines {
+		m.outScroll = len(m.output) - visibleLines
+	} else {
+		m.outScroll = 0
+	}
+}
+
+func timestamp() string {
+	return time.Now().Format("15:04:05")
 }
 
 func (m Model) Init() tea.Cmd {
@@ -88,7 +138,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width = msg.Width
 		m.height = msg.Height
-		m.textInput.Width = max(20, msg.Width-10)
+		m.textInput.Width = max(20, msg.Width/2-10)
 		return m, nil
 
 	case pullFinishedMsg:
@@ -103,21 +153,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				if r.err != nil {
 					m.repos[i].LastOp = "pull failed"
 					failures++
+					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
 				} else {
 					m.repos[i].LastOp = "pull ok"
 					successes++
+					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
 				}
 			}
 		}
 		m.persist()
-		m.status = fmt.Sprintf("Pull complete: %d ok, %d failed", successes, failures)
+		summary := fmt.Sprintf("Pull complete: %d ok, %d failed", successes, failures)
+		m.status = summary
+		m.logInfo("--- " + summary + " ---")
+		m.scrollToBottom(m.outPanelHeight())
 		return m, nil
 
 	case lazygitExitedMsg:
 		if msg.err != nil {
 			m.status = fmt.Sprintf("lazygit failed: %v", msg.err)
+			m.logError("lazygit: " + msg.err.Error())
 		} else {
 			m.status = "Returned from lazygit"
+			m.logInfo("lazygit: session ended")
 		}
 		return m, nil
 
@@ -147,25 +204,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.repos[i].Selected = true
 			}
 			m.persist()
-			m.status = fmt.Sprintf("Selected %d repositories", len(m.repos))
+			msg := fmt.Sprintf("Selected all %d repositories", len(m.repos))
+			m.status = msg
+			m.logInfo(msg)
 		case "A":
 			for i := range m.repos {
 				m.repos[i].Selected = false
 			}
 			m.persist()
 			m.status = "Deselected all repositories"
+			m.logInfo("Deselected all repositories")
 		case "?":
 			m.showHelp = !m.showHelp
 		case "o":
 			m.inputMode = inputAddOne
 			m.textInput.SetValue("")
 			m.textInput.Focus()
-			m.status = "Add repo: enter path (drag-drop works as pasted path)"
+			m.status = "Add repo: enter path"
+			m.logInfo("Add repo: waiting for path input...")
 		case "s":
 			m.inputMode = inputScan
 			m.textInput.SetValue("")
 			m.textInput.Focus()
 			m.status = "Scan for repos: enter root directory"
+			m.logInfo("Scan: waiting for root directory input...")
 		case "p":
 			if m.busy {
 				m.status = "Busy running pull"
@@ -174,10 +236,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			selected := selectedRepos(m.repos)
 			if len(selected) == 0 {
 				m.status = "No repositories selected"
+				m.logInfo("Pull: no repositories selected")
 				return m, nil
 			}
 			m.busy = true
 			m.status = fmt.Sprintf("Pulling %d repositories...", len(selected))
+			m.logInfo(fmt.Sprintf("--- Pull started: %d repos ---", len(selected)))
+			for _, r := range selected {
+				m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
+			}
+			m.scrollToBottom(m.outPanelHeight())
 			return m, pullSelectedCmd(selected)
 		case "z":
 			if len(m.repos) == 0 {
@@ -191,13 +259,52 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			cmd.Stdout = os.Stdout
 			cmd.Stderr = os.Stderr
 			m.status = fmt.Sprintf("Launching lazygit: %s", repo.Name)
+			m.logInfo(fmt.Sprintf("lazygit: opening %s (%s)", repo.Name, repo.Path))
+			m.scrollToBottom(m.outPanelHeight())
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return lazygitExitedMsg{err: err}
 			})
+		// Output panel scrolling
+		case "pgup":
+			step := max(1, m.outPanelHeight()-1)
+			m.outScroll = max(0, m.outScroll-step)
+		case "pgdown":
+			step := max(1, m.outPanelHeight()-1)
+			limit := max(0, len(m.output)-m.outPanelHeight())
+			m.outScroll = min(m.outScroll+step, limit)
 		}
 	}
 
 	return m, nil
+}
+
+// outPanelHeight returns how many output lines are visible given current terminal height.
+func (m *Model) outPanelHeight() int {
+	// reserve: 2 title rows + 1 header + 1 status bar + 1 key hint + 2 padding
+	reserved := 7
+	if m.inputMode != inputNone {
+		reserved += 2
+	}
+	h := m.height - reserved
+	if h < 3 {
+		return 3
+	}
+	return h
+}
+
+// leftWidth and rightWidth split the terminal roughly 50/50 with a 1-char gutter.
+func (m *Model) leftWidth() int {
+	if m.width < 40 {
+		return m.width
+	}
+	return m.width/2 - 1
+}
+
+func (m *Model) rightWidth() int {
+	if m.width < 40 {
+		return 0
+	}
+	return m.width - m.leftWidth() - 1
 }
 
 func (m Model) View() string {
@@ -205,28 +312,38 @@ func (m Model) View() string {
 		return m.helpView()
 	}
 
-	var b strings.Builder
-	b.WriteString("repotui\n\n")
-	b.WriteString("Repos\n")
-	b.WriteString("  Sel  Name                       Path                               Last\n")
-	b.WriteString("  ---  -------------------------  ---------------------------------  -----------\n")
+	lw := m.leftWidth()
+	rw := m.rightWidth()
+	panelH := m.outPanelHeight()
+
+	// ---------- build left column lines ----------
+	leftLines := []string{
+		" rt - repo tool",
+		"",
+		" Repos",
+		" " + trimRight("Sel  Name", lw-1),
+		" " + strings.Repeat("-", max(0, lw-2)),
+	}
 
 	if len(m.repos) == 0 {
-		b.WriteString("  (no repositories tracked; press o to add one or s to scan)\n")
+		leftLines = append(leftLines, "  (no repos; press o to add or s to scan)")
 	} else {
 		for i, repo := range m.repos {
-			cursor := " "
+			cur := " "
 			if i == m.cursor {
-				cursor = ">"
+				cur = ">"
 			}
 			sel := "[ ]"
 			if repo.Selected {
 				sel = "[x]"
 			}
-			name := trimRight(repo.Name, 25)
-			path := trimRight(repo.Path, 33)
-			last := trimRight(repo.LastOp, 11)
-			b.WriteString(fmt.Sprintf("%s %s  %-25s  %-33s  %-11s\n", cursor, sel, name, path, last))
+			last := ""
+			if repo.LastOp != "" {
+				last = " [" + repo.LastOp + "]"
+			}
+			nameW := max(0, lw-9)
+			line := fmt.Sprintf("%s %s %s%s", cur, sel, trimRight(repo.Name, nameW), last)
+			leftLines = append(leftLines, " "+trimRight(line, lw-1))
 		}
 	}
 
@@ -235,24 +352,81 @@ func (m Model) View() string {
 		if m.inputMode == inputScan {
 			prompt = "Scan root"
 		}
-		b.WriteString("\n")
-		b.WriteString(prompt + ": " + m.textInput.View() + "\n")
-		b.WriteString("Enter=confirm Esc=cancel\n")
+		leftLines = append(leftLines, "", " "+prompt+": "+m.textInput.View(), " Enter=confirm Esc=cancel")
 	}
 
+	// ---------- build right column lines ----------
+	rightLines := []string{
+		" Command Output",
+		" " + strings.Repeat("-", max(0, rw-2)),
+	}
+
+	// visible slice of output buffer
+	start := m.outScroll
+	if start > len(m.output) {
+		start = len(m.output)
+	}
+	end := start + (panelH - len(rightLines))
+	if end > len(m.output) {
+		end = len(m.output)
+	}
+	visible := m.output[start:end]
+
+	for _, ol := range visible {
+		prefix := "  "
+		if ol.fail {
+			prefix = "! "
+		}
+		line := prefix + ol.ts + " " + ol.text
+		rightLines = append(rightLines, " "+trimRight(line, rw-1))
+	}
+
+	// scroll indicator
+	if len(m.output) > 0 {
+		indicator := fmt.Sprintf(" [%d-%d / %d]", start+1, start+len(visible), len(m.output))
+		rightLines = append(rightLines, trimRight(indicator, rw))
+	}
+
+	// ---------- merge columns side by side ----------
+	var b strings.Builder
+	totalRows := max(len(leftLines), len(rightLines))
+	divider := "|"
+	if rw == 0 {
+		divider = ""
+	}
+
+	for i := 0; i < totalRows; i++ {
+		lLine := ""
+		if i < len(leftLines) {
+			lLine = leftLines[i]
+		}
+		rLine := ""
+		if i < len(rightLines) {
+			rLine = rightLines[i]
+		}
+
+		if rw > 0 {
+			paddedL := padRight(lLine, lw)
+			b.WriteString(paddedL + divider + rLine + "\n")
+		} else {
+			b.WriteString(lLine + "\n")
+		}
+	}
+
+	// ---------- status bar ----------
 	busy := "idle"
 	if m.busy {
 		busy = "busy"
 	}
 	b.WriteString("\n")
-	b.WriteString("Status: " + m.status + " [" + busy + "]\n")
-	b.WriteString("Keys: j/k or up/down move | space toggle | a select-all | A deselect-all | o add | s scan | p pull selected | z lazygit | ? help | q quit\n")
+	b.WriteString(" Status: " + m.status + " [" + busy + "]\n")
+	b.WriteString(" j/k move  space toggle  a/A sel/desel-all  o add  s scan  p pull  z lazygit  PgUp/PgDn scroll  ? help  q quit\n")
 	return b.String()
 }
 
 func (m Model) helpView() string {
 	return strings.Join([]string{
-		"repotui help",
+		"rt - repo tool help",
 		"",
 		"Navigation",
 		"  j/k or up/down  Move highlight",
@@ -268,12 +442,23 @@ func (m Model) helpView() string {
 		"  p               Pull all selected repositories",
 		"  z               Launch lazygit for highlighted repository",
 		"",
+		"Output panel",
+		"  PgUp / PgDn     Scroll command output panel",
+		"",
 		"UI",
 		"  ?               Toggle this help screen",
 		"  q / Ctrl+C      Quit",
 		"",
 		"Press ? to close help",
 	}, "\n")
+}
+
+func padRight(s string, width int) string {
+	r := []rune(s)
+	if len(r) >= width {
+		return string(r[:width])
+	}
+	return s + strings.Repeat(" ", width-len(r))
 }
 
 func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -297,13 +482,17 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.inputMode = inputNone
 			if err != nil {
 				m.status = err.Error()
+				m.logError("add: " + err.Error())
 				return m, nil
 			}
 			if !added {
 				m.status = "Repository already tracked"
+				m.logInfo("add: already tracked: " + value)
 				return m, nil
 			}
 			m.status = "Repository added"
+			m.logSuccess("add: " + value)
+			m.scrollToBottom(m.outPanelHeight())
 			return m, nil
 		}
 
@@ -312,12 +501,14 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			if err != nil {
 				m.inputMode = inputNone
 				m.status = fmt.Sprintf("Invalid path: %v", err)
+				m.logError("scan: invalid path: " + err.Error())
 				return m, nil
 			}
 			repos, err := discovery.ScanGitRepos(root)
 			if err != nil {
 				m.inputMode = inputNone
 				m.status = fmt.Sprintf("Scan failed: %v", err)
+				m.logError("scan: " + err.Error())
 				return m, nil
 			}
 			addedCount := 0
@@ -325,10 +516,14 @@ func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 				added, addErr := m.addRepo(path)
 				if addErr == nil && added {
 					addedCount++
+					m.logSuccess("scan added: " + path)
 				}
 			}
 			m.inputMode = inputNone
-			m.status = fmt.Sprintf("Scan complete: %d new repos added", addedCount)
+			summary := fmt.Sprintf("Scan complete: %d new repos added", addedCount)
+			m.status = summary
+			m.logInfo("--- " + summary + " ---")
+			m.scrollToBottom(m.outPanelHeight())
 			return m, nil
 		}
 	}
@@ -457,6 +652,13 @@ func trimRight(s string, width int) string {
 
 func max(a, b int) int {
 	if a > b {
+		return a
+	}
+	return b
+}
+
+func min(a, b int) int {
+	if a < b {
 		return a
 	}
 	return b
