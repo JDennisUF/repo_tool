@@ -9,7 +9,7 @@ import (
 )
 
 const (
-	appName    = "repotui"
+	appName    = "rt"
 	configFile = "repos.json"
 )
 

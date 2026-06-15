@@ -13,6 +13,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/lipgloss"
 	"repo_tool/internal/discovery"
 	"repo_tool/internal/gitutil"
 	"repo_tool/internal/store"
@@ -24,6 +25,14 @@ const (
 	inputNone inputMode = iota
 	inputAddOne
 	inputScan
+)
+
+type focusSection int
+
+const (
+	focusRepos focusSection = iota
+	focusInfo
+	focusOutput
 )
 
 type pullResult struct {
@@ -55,14 +64,23 @@ type Model struct {
 	status   string
 	busy     bool
 	showHelp bool
+	focus    focusSection
 
 	// output panel
 	output    []outputLine
 	outScroll int // index of first visible line
 
-	store     *store.Store
-	textInput textinput.Model
-	inputMode inputMode
+	store          *store.Store
+	textInput      textinput.Model
+	inputMode      inputMode
+	theme          themePalette
+	themeName      string
+	themes         map[string]themePalette
+	themeNames     []string
+	themeSelecting bool
+	themeCursor    int
+	savedTheme     themePalette
+	savedThemeName string
 }
 
 func NewModel() Model {
@@ -70,12 +88,18 @@ func NewModel() Model {
 	ti.Prompt = "> "
 	ti.CharLimit = 2048
 	ti.Width = 80
+	themes := loadThemeSet()
 
 	s, err := store.New()
 	m := Model{
-		store:     s,
-		textInput: ti,
-		status:    "Ready",
+		store:      s,
+		textInput:  ti,
+		status:     "Ready",
+		focus:      focusRepos,
+		theme:      themes.Themes[themes.Active],
+		themeName:  themes.Active,
+		themes:     themes.Themes,
+		themeNames: themes.Names,
 	}
 	if err != nil {
 		m.status = fmt.Sprintf("Store init error: %v", err)
@@ -182,16 +206,33 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.inputMode != inputNone {
 			return m.handleInputMode(msg)
 		}
+		if m.themeSelecting {
+			return m.handleThemeSelector(msg)
+		}
 
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "0":
+			m.focus = focusRepos
+			m.status = "Focused [0] Repos"
+		case "1":
+			m.focus = focusInfo
+			m.status = "Focused [1] Repo Info"
+		case "2":
+			m.focus = focusOutput
+			m.status = "Focused [2] Command Output"
 		case "up", "k":
-			if m.cursor > 0 {
+			if m.focus == focusOutput {
+				m.outScroll = max(0, m.outScroll-1)
+			} else if m.cursor > 0 {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.repos)-1 {
+			if m.focus == focusOutput {
+				limit := max(0, len(m.output)-m.outPanelHeight())
+				m.outScroll = min(m.outScroll+1, limit)
+			} else if m.cursor < len(m.repos)-1 {
 				m.cursor++
 			}
 		case " ":
@@ -216,6 +257,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo("Deselected all repositories")
 		case "?":
 			m.showHelp = !m.showHelp
+		case "T":
+			m.openThemeSelector()
 		case "o":
 			m.inputMode = inputAddOne
 			m.textInput.SetValue("")
@@ -247,6 +290,19 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.scrollToBottom(m.outPanelHeight())
 			return m, pullSelectedCmd(selected)
+		case "x":
+			if len(m.repos) == 0 {
+				return m, nil
+			}
+			removed := m.repos[m.cursor]
+			m.repos = append(m.repos[:m.cursor], m.repos[m.cursor+1:]...)
+			if m.cursor > 0 && m.cursor >= len(m.repos) {
+				m.cursor = len(m.repos) - 1
+			}
+			m.persist()
+			m.status = fmt.Sprintf("Removed: %s", removed.Name)
+			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, removed.Path))
+			return m, nil
 		case "z":
 			if len(m.repos) == 0 {
 				m.status = "No repository highlighted"
@@ -280,31 +336,153 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 // outPanelHeight returns how many output lines are visible given current terminal height.
 func (m *Model) outPanelHeight() int {
-	// reserve: 2 title rows + 1 header + 1 status bar + 1 key hint + 2 padding
-	reserved := 7
-	if m.inputMode != inputNone {
-		reserved += 2
+	bodyH := max(8, m.height-4)
+	if m.rightWidth() == 0 {
+		return max(1, bodyH-4)
 	}
-	h := m.height - reserved
-	if h < 3 {
-		return 3
-	}
-	return h
+	infoH := min(8, max(5, bodyH/3))
+	outputH := max(5, bodyH-infoH)
+	return max(1, outputH-4)
 }
 
 // leftWidth and rightWidth split the terminal roughly 50/50 with a 1-char gutter.
 func (m *Model) leftWidth() int {
-	if m.width < 40 {
+	if m.width < 64 {
 		return m.width
 	}
 	return m.width/2 - 1
 }
 
 func (m *Model) rightWidth() int {
-	if m.width < 40 {
+	if m.width < 64 {
 		return 0
 	}
 	return m.width - m.leftWidth() - 1
+}
+
+func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style {
+	borderColor := m.theme.Border
+	if focused {
+		borderColor = m.theme.BorderFocus
+	}
+	return lipgloss.NewStyle().
+		Width(max(1, width-2)).
+		Height(max(1, height-2)).
+		Border(lipgloss.RoundedBorder()).
+		BorderForeground(lipgloss.Color(borderColor)).
+		Foreground(lipgloss.Color(m.theme.Foreground)).
+		Background(lipgloss.Color(m.theme.Background))
+}
+
+func (m Model) renderSection(number int, title string, body string, width int, height int, focused bool) string {
+	header := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Header)).
+		Bold(true).
+		Render(fmt.Sprintf("[%d] %s", number, title))
+	content := header
+	if body != "" {
+		content += "\n" + body
+	}
+	return m.sectionStyle(width, height, focused).Render(content)
+}
+
+func (m Model) buildReposContent(width int, rows int) string {
+	lines := []string{
+		lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render(trimRight("Sel  Name", width)),
+	}
+
+	if len(m.repos) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no repos; press o to add or s to scan)"))
+	} else {
+		nameW := max(6, width-15)
+		for i, repo := range m.repos {
+			cursor := " "
+			if i == m.cursor {
+				cursor = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Cursor)).Bold(true).Render(">")
+			}
+			sel := "[ ]"
+			if repo.Selected {
+				sel = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Selection)).Bold(true).Render("[x]")
+			}
+			last := ""
+			if repo.LastOp != "" {
+				lastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Warning))
+				if strings.Contains(repo.LastOp, "ok") {
+					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Success))
+				}
+				if strings.Contains(repo.LastOp, "failed") {
+					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Error))
+				}
+				last = " " + lastStyle.Render("["+trimRight(repo.LastOp, 12)+"]")
+			}
+			name := trimRight(repo.Name, nameW)
+			row := fmt.Sprintf("%s %s %s%s", cursor, sel, name, last)
+			if i == m.cursor && m.focus == focusRepos {
+				row = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Bold(true).Render(row)
+			}
+			lines = append(lines, row)
+		}
+	}
+
+	if m.inputMode != inputNone {
+		prompt := "Path"
+		if m.inputMode == inputScan {
+			prompt = "Scan root"
+		}
+		input := trimRight(prompt+": "+m.textInput.View(), width)
+		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Input)).Render(input), lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("Enter=confirm Esc=cancel"))
+	}
+
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
+func (m Model) buildRepoInfoContent(width int, rows int) string {
+	if len(m.repos) == 0 || width < 10 {
+		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no repo selected)")
+	}
+
+	r := m.repos[m.cursor]
+	lastOp := r.LastOp
+	if lastOp == "" {
+		lastOp = "none"
+	}
+	lines := []string{
+		m.labelValue("Name", r.Name, width),
+		m.labelValue("Path", r.Path, width),
+		m.labelValue("Last", lastOp, width),
+	}
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
+func (m Model) buildOutputContent(width int, rows int) string {
+	if rows <= 0 {
+		return ""
+	}
+	visibleRows := max(1, rows-1)
+	start := m.outScroll
+	if start > len(m.output) {
+		start = len(m.output)
+	}
+	end := min(start+visibleRows, len(m.output))
+	lines := []string{}
+	for _, ol := range m.output[start:end] {
+		style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+		prefix := "  "
+		if ol.fail {
+			prefix = "! "
+			style = style.Foreground(lipgloss.Color(m.theme.Error))
+		}
+		line := trimRight(prefix+ol.ts+" "+ol.text, width)
+		lines = append(lines, style.Render(line))
+	}
+	if len(lines) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no command output yet)"))
+	}
+	if len(m.output) > 0 {
+		indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(m.output))
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render(trimRight(indicator, width)))
+	}
+	return strings.Join(limitLines(lines, rows), "\n")
 }
 
 func (m Model) View() string {
@@ -314,103 +492,25 @@ func (m Model) View() string {
 
 	lw := m.leftWidth()
 	rw := m.rightWidth()
-	panelH := m.outPanelHeight()
-
-	// ---------- build left column lines ----------
-	leftLines := []string{
-		" rt - repo tool",
-		"",
-		" Repos",
-		" " + trimRight("Sel  Name", lw-1),
-		" " + strings.Repeat("-", max(0, lw-2)),
+	bodyH := max(8, m.height-4)
+	selectorH := 0
+	if m.themeSelecting {
+		selectorH = min(9, max(5, len(m.themeNames)+3))
+		bodyH = max(6, bodyH-selectorH)
 	}
+	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, bodyH-3)), lw, bodyH, m.focus == focusRepos)
 
-	if len(m.repos) == 0 {
-		leftLines = append(leftLines, "  (no repos; press o to add or s to scan)")
-	} else {
-		for i, repo := range m.repos {
-			cur := " "
-			if i == m.cursor {
-				cur = ">"
-			}
-			sel := "[ ]"
-			if repo.Selected {
-				sel = "[x]"
-			}
-			last := ""
-			if repo.LastOp != "" {
-				last = " [" + repo.LastOp + "]"
-			}
-			nameW := max(0, lw-9)
-			line := fmt.Sprintf("%s %s %s%s", cur, sel, trimRight(repo.Name, nameW), last)
-			leftLines = append(leftLines, " "+trimRight(line, lw-1))
-		}
+	body := leftPanel
+	if rw > 0 {
+		infoH := min(8, max(5, bodyH/3))
+		outputH := max(5, bodyH-infoH)
+		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-3)), rw, infoH, m.focus == focusInfo)
+		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, rw-2), max(1, outputH-3)), rw, outputH, m.focus == focusOutput)
+		rightPanel := lipgloss.JoinVertical(lipgloss.Left, infoPanel, outputPanel)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
 	}
-
-	if m.inputMode != inputNone {
-		prompt := "Path"
-		if m.inputMode == inputScan {
-			prompt = "Scan root"
-		}
-		leftLines = append(leftLines, "", " "+prompt+": "+m.textInput.View(), " Enter=confirm Esc=cancel")
-	}
-
-	// ---------- build right column lines ----------
-	rightLines := []string{
-		" Command Output",
-		" " + strings.Repeat("-", max(0, rw-2)),
-	}
-
-	// visible slice of output buffer
-	start := m.outScroll
-	if start > len(m.output) {
-		start = len(m.output)
-	}
-	end := start + (panelH - len(rightLines))
-	if end > len(m.output) {
-		end = len(m.output)
-	}
-	visible := m.output[start:end]
-
-	for _, ol := range visible {
-		prefix := "  "
-		if ol.fail {
-			prefix = "! "
-		}
-		line := prefix + ol.ts + " " + ol.text
-		rightLines = append(rightLines, " "+trimRight(line, rw-1))
-	}
-
-	// scroll indicator
-	if len(m.output) > 0 {
-		indicator := fmt.Sprintf(" [%d-%d / %d]", start+1, start+len(visible), len(m.output))
-		rightLines = append(rightLines, trimRight(indicator, rw))
-	}
-
-	// ---------- merge columns side by side ----------
-	var b strings.Builder
-	totalRows := max(len(leftLines), len(rightLines))
-	divider := "|"
-	if rw == 0 {
-		divider = ""
-	}
-
-	for i := 0; i < totalRows; i++ {
-		lLine := ""
-		if i < len(leftLines) {
-			lLine = leftLines[i]
-		}
-		rLine := ""
-		if i < len(rightLines) {
-			rLine = rightLines[i]
-		}
-
-		if rw > 0 {
-			paddedL := padRight(lLine, lw)
-			b.WriteString(paddedL + divider + rLine + "\n")
-		} else {
-			b.WriteString(lLine + "\n")
-		}
+	if m.themeSelecting {
+		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderThemeSelector(max(1, m.width), selectorH))
 	}
 
 	// ---------- status bar ----------
@@ -418,15 +518,51 @@ func (m Model) View() string {
 	if m.busy {
 		busy = "busy"
 	}
-	b.WriteString("\n")
-	b.WriteString(" Status: " + m.status + " [" + busy + "]\n")
-	b.WriteString(" j/k move  space toggle  a/A sel/desel-all  o add  s scan  p pull  z lazygit  PgUp/PgDn scroll  ? help  q quit\n")
-	return b.String()
+	status := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.StatusText)).
+		Background(lipgloss.Color(m.theme.Status)).
+		Width(max(1, m.width)).
+		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName)
+	keys := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Muted)).
+		Width(max(1, m.width)).
+		Render(" [0]/[1]/[2] focus  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  ? help  q quit")
+	return lipgloss.JoinVertical(lipgloss.Left, body, status, keys)
+}
+
+func (m Model) renderThemeSelector(width int, height int) string {
+	rows := max(1, height-3)
+	lines := []string{}
+	if len(m.themeNames) == 0 {
+		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no themes available)"))
+	} else {
+		start := 0
+		if m.themeCursor >= rows {
+			start = m.themeCursor - rows + 1
+		}
+		end := min(start+rows, len(m.themeNames))
+		for i := start; i < end; i++ {
+			name := m.themeNames[i]
+			marker := "  "
+			style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+			if i == m.themeCursor {
+				marker = "> "
+				style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+			}
+			if name == m.savedThemeName {
+				name += " *"
+			}
+			lines = append(lines, style.Render(trimRight(marker+name, max(1, width-4))))
+		}
+	}
+	footer := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("j/k preview  Enter select  Esc cancel")
+	body := strings.Join(append(lines, footer), "\n")
+	return m.renderSection(9, "Theme Selector", body, width, height, true)
 }
 
 func (m Model) helpView() string {
 	return strings.Join([]string{
-		"rt - repo tool help",
+		"rt help",
 		"",
 		"Navigation",
 		"  j/k or up/down  Move highlight",
@@ -440,12 +576,18 @@ func (m Model) helpView() string {
 		"  o               Add one repository by path",
 		"  s               Scan a directory and add discovered repositories",
 		"  p               Pull all selected repositories",
+		"  x               Remove highlighted repository from tracking",
 		"  z               Launch lazygit for highlighted repository",
 		"",
 		"Output panel",
+		"  2               Focus command output panel",
+		"  j/k             Scroll output when output panel is focused",
 		"  PgUp / PgDn     Scroll command output panel",
 		"",
 		"UI",
+		"  0               Focus repositories",
+		"  1               Focus repo info",
+		"  T               Open theme selector",
 		"  ?               Toggle this help screen",
 		"  q / Ctrl+C      Quit",
 		"",
@@ -453,12 +595,80 @@ func (m Model) helpView() string {
 	}, "\n")
 }
 
-func padRight(s string, width int) string {
-	r := []rune(s)
-	if len(r) >= width {
-		return string(r[:width])
+func (m Model) labelValue(label string, value string, width int) string {
+	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+	prefix := label + ": "
+	return labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, max(1, width-len(prefix))))
+}
+
+func (m *Model) openThemeSelector() {
+	if len(m.themeNames) == 0 {
+		m.status = "No themes available"
+		return
 	}
-	return s + strings.Repeat(" ", width-len(r))
+	m.themeSelecting = true
+	m.savedTheme = m.theme
+	m.savedThemeName = m.themeName
+	m.themeCursor = 0
+	for i, name := range m.themeNames {
+		if name == m.themeName {
+			m.themeCursor = i
+			break
+		}
+	}
+	m.status = "Theme selector: preview with j/k, Enter selects, Esc cancels"
+}
+
+func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q":
+		m.theme = m.savedTheme
+		m.themeName = m.savedThemeName
+		m.themeSelecting = false
+		m.status = "Theme selection canceled"
+	case "enter":
+		m.themeSelecting = false
+		if err := saveActiveTheme(m.themeName); err != nil {
+			m.status = fmt.Sprintf("Theme selected, save failed: %v", err)
+			m.logError("theme: save failed: " + err.Error())
+			return m, nil
+		}
+		m.savedTheme = m.theme
+		m.savedThemeName = m.themeName
+		m.status = fmt.Sprintf("Theme selected: %s", m.themeName)
+		m.logInfo("theme selected: " + m.themeName)
+	case "up", "k":
+		m.moveThemeCursor(-1)
+	case "down", "j":
+		m.moveThemeCursor(1)
+	}
+	return m, nil
+}
+
+func (m *Model) moveThemeCursor(delta int) {
+	if len(m.themeNames) == 0 {
+		return
+	}
+	m.themeCursor = (m.themeCursor + delta + len(m.themeNames)) % len(m.themeNames)
+	name := m.themeNames[m.themeCursor]
+	if palette, ok := m.themes[name]; ok {
+		m.theme = palette
+		m.themeName = name
+		m.status = "Previewing theme: " + name
+	}
+}
+
+func limitLines(lines []string, maxLines int) []string {
+	if maxLines < 0 {
+		maxLines = 0
+	}
+	if len(lines) <= maxLines {
+		return lines
+	}
+	return lines[:maxLines]
 }
 
 func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

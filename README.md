@@ -1,4 +1,4 @@
-# repotui
+# rt
 
 Terminal UI utility for tracking many Git repositories and running actions across selected repos.
 
@@ -11,13 +11,16 @@ Terminal UI utility for tracking many Git repositories and running actions acros
 - Select all (`a`) and deselect all (`A`)
 - Pull all selected repositories (`p`)
 - Open lazygit in highlighted repository (`z`)
+- Numbered, lazygit-style focusable sections (`0`, `1`, `2`)
+- JSON-backed color themes
+- Theme selector (`T`)
 - Help screen (`?`)
 
 ## Build and Run
 
 ```bash
-go build -o repotui ./cmd/repotui
-./repotui
+go build -o rt ./cmd/rt
+./rt
 ```
 
 ## Keymap
@@ -30,12 +33,54 @@ go build -o repotui ./cmd/repotui
 - `s`: scan/search a root directory for repos
 - `p`: pull selected repos
 - `z`: launch lazygit on highlighted repo
+- `0`: focus repositories
+- `1`: focus repo info
+- `2`: focus command output
+- `j`/`k`: scroll command output when output is focused
+- `T`: open the theme selector; `j`/`k` previews, `Enter` selects, `Esc` cancels
 - `?`: show/hide help screen
 - `q` or `Ctrl+C`: quit
+
+## Themes
+
+Default themes live in `internal/ui/themes.json`. To override or add themes without rebuilding, create:
+
+```text
+~/.config/rt/themes.json
+```
+
+Use the same JSON shape:
+
+```json
+{
+  "activeTheme": "graphite",
+  "themes": {
+    "graphite": {
+      "background": "#0B0F14",
+      "foreground": "#F3F4F6",
+      "muted": "#A7B0BE",
+      "border": "#4B5563",
+      "borderFocus": "#60A5FA",
+      "header": "#FCD34D",
+      "accent": "#22D3EE",
+      "selection": "#FBBF24",
+      "success": "#34D399",
+      "error": "#FB7185",
+      "warning": "#F59E0B",
+      "status": "#111827",
+      "statusText": "#FFFFFF",
+      "cursor": "#60A5FA",
+      "input": "#C084FC"
+    }
+  }
+}
+```
+
+Set `RT_THEME=cobalt` to choose a named theme at launch.
 
 ## Notes
 
 - Repositories are persisted at:
-  - Linux: `~/.config/repotui/repos.json`
+  - Linux: `~/.config/rt/repos.json`
 - Pull uses `git pull --ff-only` for safer batch updates.
 - `lazygit` must be installed and in `PATH` for `z` to work.
