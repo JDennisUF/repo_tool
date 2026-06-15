@@ -78,6 +78,8 @@ Use the same JSON shape:
 
 Set `RT_THEME=cobalt` to choose a named theme at launch.
 
+The `background` value controls the full app canvas, including otherwise empty terminal space.
+
 ## Notes
 
 - Repositories are persisted at:

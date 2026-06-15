@@ -370,43 +370,44 @@ func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style 
 		Height(max(1, height-2)).
 		Border(lipgloss.RoundedBorder()).
 		BorderForeground(lipgloss.Color(borderColor)).
+		BorderBackground(lipgloss.Color(m.theme.Background)).
 		Foreground(lipgloss.Color(m.theme.Foreground)).
 		Background(lipgloss.Color(m.theme.Background))
 }
 
 func (m Model) renderSection(number int, title string, body string, width int, height int, focused bool) string {
-	header := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Header)).
+	header := m.fgStyle(m.theme.Header).
 		Bold(true).
 		Render(fmt.Sprintf("[%d] %s", number, title))
 	content := header
 	if body != "" {
 		content += "\n" + body
 	}
+	content = m.padBackground(content, max(1, width-2), max(1, height-2))
 	return m.sectionStyle(width, height, focused).Render(content)
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
 	lines := []string{
-		lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render(trimRight("Sel  Name", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight("Sel  Name", width)),
 	}
 
 	if len(m.repos) == 0 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no repos; press o to add or s to scan)"))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add or s to scan)"))
 	} else {
 		nameW := max(6, width-15)
 		for i, repo := range m.repos {
 			cursor := " "
 			if i == m.cursor {
-				cursor = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Cursor)).Bold(true).Render(">")
+				cursor = m.fgStyle(m.theme.Cursor).Bold(true).Render(">")
 			}
 			sel := "[ ]"
 			if repo.Selected {
-				sel = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Selection)).Bold(true).Render("[x]")
+				sel = m.fgStyle(m.theme.Selection).Bold(true).Render("[x]")
 			}
 			last := ""
 			if repo.LastOp != "" {
-				lastStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Warning))
+				lastStyle := m.fgStyle(m.theme.Warning)
 				if strings.Contains(repo.LastOp, "ok") {
 					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Success))
 				}
@@ -418,7 +419,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 			name := trimRight(repo.Name, nameW)
 			row := fmt.Sprintf("%s %s %s%s", cursor, sel, name, last)
 			if i == m.cursor && m.focus == focusRepos {
-				row = lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Bold(true).Render(row)
+				row = m.fgStyle(m.theme.Accent).Bold(true).Render(row)
 			}
 			lines = append(lines, row)
 		}
@@ -430,7 +431,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 			prompt = "Scan root"
 		}
 		input := trimRight(prompt+": "+m.textInput.View(), width)
-		lines = append(lines, "", lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Input)).Render(input), lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("Enter=confirm Esc=cancel"))
+		lines = append(lines, "", m.fgStyle(m.theme.Input).Render(input), m.fgStyle(m.theme.Muted).Render("Enter=confirm Esc=cancel"))
 	}
 
 	return strings.Join(limitLines(lines, rows), "\n")
@@ -438,7 +439,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 
 func (m Model) buildRepoInfoContent(width int, rows int) string {
 	if len(m.repos) == 0 || width < 10 {
-		return lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no repo selected)")
+		return m.fgStyle(m.theme.Muted).Render("(no repo selected)")
 	}
 
 	r := m.repos[m.cursor]
@@ -466,7 +467,7 @@ func (m Model) buildOutputContent(width int, rows int) string {
 	end := min(start+visibleRows, len(m.output))
 	lines := []string{}
 	for _, ol := range m.output[start:end] {
-		style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+		style := m.fgStyle(m.theme.Foreground)
 		prefix := "  "
 		if ol.fail {
 			prefix = "! "
@@ -476,18 +477,18 @@ func (m Model) buildOutputContent(width int, rows int) string {
 		lines = append(lines, style.Render(line))
 	}
 	if len(lines) == 0 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no command output yet)"))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no command output yet)"))
 	}
 	if len(m.output) > 0 {
 		indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(m.output))
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render(trimRight(indicator, width)))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight(indicator, width)))
 	}
 	return strings.Join(limitLines(lines, rows), "\n")
 }
 
 func (m Model) View() string {
 	if m.showHelp {
-		return m.helpView()
+		return m.renderApp(m.helpView())
 	}
 
 	lw := m.leftWidth()
@@ -507,7 +508,8 @@ func (m Model) View() string {
 		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-3)), rw, infoH, m.focus == focusInfo)
 		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, rw-2), max(1, outputH-3)), rw, outputH, m.focus == focusOutput)
 		rightPanel := lipgloss.JoinVertical(lipgloss.Left, infoPanel, outputPanel)
-		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, " ", rightPanel)
+		gutter := m.renderGutter(bodyH)
+		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
 	}
 	if m.themeSelecting {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderThemeSelector(max(1, m.width), selectorH))
@@ -523,18 +525,71 @@ func (m Model) View() string {
 		Background(lipgloss.Color(m.theme.Status)).
 		Width(max(1, m.width)).
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName)
-	keys := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Muted)).
+	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
 		Render(" [0]/[1]/[2] focus  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  ? help  q quit")
-	return lipgloss.JoinVertical(lipgloss.Left, body, status, keys)
+	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
+}
+
+func (m Model) renderApp(content string) string {
+	content = m.padBackground(content, max(1, m.width), max(1, m.height))
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Foreground)).
+		Background(lipgloss.Color(m.theme.Background)).
+		Width(max(1, m.width)).
+		Height(max(1, m.height)).
+		Render(content)
+}
+
+func (m Model) fgStyle(color string) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Background(lipgloss.Color(m.theme.Background))
+}
+
+func (m Model) bgStyle() lipgloss.Style {
+	return lipgloss.NewStyle().
+		Background(lipgloss.Color(m.theme.Background))
+}
+
+func (m Model) renderGutter(height int) string {
+	if height <= 0 {
+		return ""
+	}
+	lines := make([]string, height)
+	for i := range lines {
+		lines[i] = m.bgStyle().Render(" ")
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) padBackground(content string, width int, height int) string {
+	if width <= 0 || height <= 0 {
+		return ""
+	}
+	lines := strings.Split(content, "\n")
+	if len(lines) > height {
+		lines = lines[:height]
+	}
+	fillStyle := m.bgStyle()
+	for i, line := range lines {
+		lineWidth := lipgloss.Width(line)
+		if lineWidth < width {
+			line += fillStyle.Render(strings.Repeat(" ", width-lineWidth))
+		}
+		lines[i] = line
+	}
+	for len(lines) < height {
+		lines = append(lines, fillStyle.Render(strings.Repeat(" ", width)))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderThemeSelector(width int, height int) string {
 	rows := max(1, height-3)
 	lines := []string{}
 	if len(m.themeNames) == 0 {
-		lines = append(lines, lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("(no themes available)"))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no themes available)"))
 	} else {
 		start := 0
 		if m.themeCursor >= rows {
@@ -544,7 +599,7 @@ func (m Model) renderThemeSelector(width int, height int) string {
 		for i := start; i < end; i++ {
 			name := m.themeNames[i]
 			marker := "  "
-			style := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+			style := m.fgStyle(m.theme.Foreground)
 			if i == m.themeCursor {
 				marker = "> "
 				style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
@@ -555,7 +610,7 @@ func (m Model) renderThemeSelector(width int, height int) string {
 			lines = append(lines, style.Render(trimRight(marker+name, max(1, width-4))))
 		}
 	}
-	footer := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Muted)).Render("j/k preview  Enter select  Esc cancel")
+	footer := m.fgStyle(m.theme.Muted).Render("j/k preview  Enter select  Esc cancel")
 	body := strings.Join(append(lines, footer), "\n")
 	return m.renderSection(9, "Theme Selector", body, width, height, true)
 }
@@ -596,8 +651,8 @@ func (m Model) helpView() string {
 }
 
 func (m Model) labelValue(label string, value string, width int) string {
-	labelStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
-	valueStyle := lipgloss.NewStyle().Foreground(lipgloss.Color(m.theme.Foreground))
+	labelStyle := m.fgStyle(m.theme.Accent).Bold(true)
+	valueStyle := m.fgStyle(m.theme.Foreground)
 	prefix := label + ": "
 	return labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, max(1, width-len(prefix))))
 }
