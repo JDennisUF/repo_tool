@@ -16,7 +16,8 @@
       "status": "#111827",
       "statusText": "#FFFFFF",
       "cursor": "#60A5FA",
-      "input": "#C084FC"
+      "input": "#C084FC",
+      "rowFocusBg": "#111827"
     },
     "aurora": {
       "background": "#08111F",
@@ -33,7 +34,8 @@
       "status": "#102033",
       "statusText": "#F8FAFC",
       "cursor": "#67E8F9",
-      "input": "#F0ABFC"
+      "input": "#F0ABFC",
+      "rowFocusBg": "#102033"
     },
     "cobalt": {
       "background": "#071426",
@@ -50,7 +52,8 @@
       "status": "#0F2742",
       "statusText": "#FFFFFF",
       "cursor": "#93C5FD",
-      "input": "#C4B5FD"
+      "input": "#C4B5FD",
+      "rowFocusBg": "#102A46"
     },
     "daylight": {
       "background": "#FAFAF7",
@@ -67,7 +70,8 @@
       "status": "#E5E7EB",
       "statusText": "#111827",
       "cursor": "#2563EB",
-      "input": "#7C3AED"
+      "input": "#7C3AED",
+      "rowFocusBg": "#E5E7EB"
     },
     "ember": {
       "background": "#140F0B",
@@ -84,7 +88,8 @@
       "status": "#251A13",
       "statusText": "#FFF7ED",
       "cursor": "#FDBA74",
-      "input": "#F0ABFC"
+      "input": "#F0ABFC",
+      "rowFocusBg": "#251A13"
     },
     "violet": {
       "background": "#100A1F",
@@ -101,7 +106,8 @@
       "status": "#1E1633",
       "statusText": "#FFFFFF",
       "cursor": "#F0ABFC",
-      "input": "#93C5FD"
+      "input": "#93C5FD",
+      "rowFocusBg": "#221A3A"
     }
   }
 }

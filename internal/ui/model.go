@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/muesli/reflow/truncate"
 	"repo_tool/internal/discovery"
 	"repo_tool/internal/gitutil"
 	"repo_tool/internal/store"
@@ -50,7 +51,8 @@ type pullFinishedMsg struct {
 }
 
 type lazygitExitedMsg struct {
-	err error
+	err  error
+	path string
 }
 
 type vscodeOpenedMsg struct {
@@ -98,6 +100,7 @@ type Model struct {
 	favoritesDialog     bool
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
+	repoStatuses        map[string]gitutil.RepoStatus
 }
 
 type favoritesDialogMode int
@@ -149,6 +152,7 @@ func NewModel() Model {
 	if _, ok := m.favoriteLists[m.activeFavoriteList]; !ok {
 		m.favoriteLists[m.activeFavoriteList] = map[string]struct{}{}
 	}
+	m.refreshRepoStatuses()
 	m.logInfo(fmt.Sprintf("Loaded %d repositories", len(state.Repos)))
 	return m
 }
@@ -240,6 +244,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.persist()
+		m.refreshRepoStatuses()
 		summary := fmt.Sprintf("Pull complete: %d ok, %d failed", successes, failures)
 		m.status = summary
 		m.logInfo("--- " + summary + " ---")
@@ -247,6 +252,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case lazygitExitedMsg:
+		if msg.path != "" {
+			m.refreshRepoStatus(msg.path)
+		}
 		if msg.err != nil {
 			m.status = fmt.Sprintf("lazygit failed: %v", msg.err)
 			m.logError("lazygit: " + msg.err.Error())
@@ -399,6 +407,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			removed := m.repos[idx]
 			m.repos = append(m.repos[:idx], m.repos[idx+1:]...)
 			m.removeRepoFromFavorites(removed.Path)
+			delete(m.repoStatuses, removed.Path)
 			m.normalizeCursor()
 			m.persist()
 			m.status = fmt.Sprintf("Removed: %s", removed.Name)
@@ -420,7 +429,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo(fmt.Sprintf("lazygit: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return lazygitExitedMsg{err: err}
+				return lazygitExitedMsg{err: err, path: repo.Path}
 			})
 		case "v":
 			idx, ok := m.currentRepoIndex()
@@ -500,20 +509,73 @@ func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style 
 }
 
 func (m Model) renderSection(number int, title string, body string, width int, height int, focused bool) string {
+	borderColor := m.theme.Border
+	if focused {
+		borderColor = m.theme.BorderFocus
+	}
+	border := lipgloss.RoundedBorder()
+	innerW := max(1, width-2)
+	innerH := max(1, height-2)
 	header := m.fgStyle(m.theme.Header).
 		Bold(true).
 		Render(fmt.Sprintf("[%d] %s", number, title))
-	content := header
-	if body != "" {
-		content += "\n" + body
+	headerFill := max(0, innerW-lipgloss.Width(header))
+	borderStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(borderColor)).
+		Background(lipgloss.Color(m.theme.Background))
+	top := borderStyle.Render(border.TopLeft) +
+		header +
+		borderStyle.Render(strings.Repeat(border.Top, headerFill)+border.TopRight)
+
+	content := m.padBackground(m.indentBody(body, innerW), innerW, innerH)
+	lines := strings.Split(content, "\n")
+	for i, line := range lines {
+		lines[i] = borderStyle.Render(border.Left) + line + borderStyle.Render(border.Right)
 	}
-	content = m.padBackground(content, max(1, width-2), max(1, height-2))
-	return m.sectionStyle(width, height, focused).Render(content)
+
+	bottom := borderStyle.Render(border.BottomLeft + strings.Repeat(border.Bottom, innerW) + border.BottomRight)
+
+	return strings.Join(append(append([]string{top}, lines...), bottom), "\n")
+}
+
+func (m *Model) refreshRepoStatuses() {
+	if m.repoStatuses == nil {
+		m.repoStatuses = make(map[string]gitutil.RepoStatus, len(m.repos))
+	}
+	valid := make(map[string]struct{}, len(m.repos))
+	for _, repo := range m.repos {
+		valid[repo.Path] = struct{}{}
+		m.repoStatuses[repo.Path] = gitutil.InspectStatus(repo.Path)
+	}
+	for path := range m.repoStatuses {
+		if _, ok := valid[path]; !ok {
+			delete(m.repoStatuses, path)
+		}
+	}
+}
+
+func (m *Model) refreshRepoStatus(path string) {
+	if m.repoStatuses == nil {
+		m.repoStatuses = map[string]gitutil.RepoStatus{}
+	}
+	m.repoStatuses[path] = gitutil.InspectStatus(path)
+}
+
+func (m Model) repoStatus(path string) gitutil.RepoStatus {
+	if status, ok := m.repoStatuses[path]; ok {
+		return status
+	}
+	return gitutil.StatusNotCloned
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
+	nameW := max(6, width-15)
+	sep := m.bgStyle().Render(" ")
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight(fmt.Sprintf("Sel Fav Name (%s)", m.activeFavoriteList), width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight(
+			padCell("Sel", 3)+" "+padCell("Fav", 3)+" "+padCell("St", 6)+" "+trimRight("Name ("+m.activeFavoriteList+")", nameW),
+			width,
+		)),
 	}
 
 	visible := m.visibleRepoIndexes()
@@ -522,37 +584,72 @@ func (m Model) buildReposContent(width int, rows int) string {
 	} else if len(visible) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos in current favorites view)"))
 	} else {
-		nameW := max(6, width-19)
 		for _, idx := range visible {
 			repo := m.repos[idx]
-			cursor := " "
-			if idx == m.cursor {
-				cursor = m.fgStyle(m.theme.Cursor).Bold(true).Render(">")
+			status := m.repoStatus(repo.Path)
+			focused := idx == m.cursor && m.focus == focusRepos
+			rowBg := m.theme.Background
+			if focused {
+				rowBg = m.theme.RowFocusBg
+				sep = m.bgStyle().Background(lipgloss.Color(rowBg)).Render(" ")
+			} else {
+				sep = m.bgStyle().Render(" ")
 			}
+
+			selStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
 			sel := "[ ]"
 			if repo.Selected {
-				sel = m.fgStyle(m.theme.Selection).Bold(true).Render("[x]")
+				selStyle = m.fgBgStyle(m.theme.Selection, rowBg).Bold(true)
+				sel = "[x]"
 			}
+			if focused {
+				selStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+			}
+
+			favStyle := m.fgBgStyle(m.theme.Muted, rowBg)
 			fav := " "
 			if m.isFavorite(repo.Path) {
-				fav = m.fgStyle(m.theme.Accent).Bold(true).Render("*")
+				favStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+				fav = "*"
 			}
+
+			statusStyle := m.fgBgStyle(m.theme.Warning, rowBg)
+			switch status {
+			case gitutil.StatusCurrent:
+				statusStyle = statusStyle.Foreground(lipgloss.Color(m.theme.Success))
+			case gitutil.StatusUncommittedChanges:
+				statusStyle = statusStyle.Foreground(lipgloss.Color(m.theme.Error))
+			case gitutil.StatusUntrackedFiles:
+				statusStyle = statusStyle.Foreground(lipgloss.Color(m.theme.Accent))
+			default:
+				statusStyle = statusStyle.Foreground(lipgloss.Color(m.theme.Muted))
+			}
+
+			nameStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
+			if focused {
+				nameStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+			}
+
 			last := ""
 			if repo.LastOp != "" {
-				lastStyle := m.fgStyle(m.theme.Warning)
+				lastStyle := m.fgBgStyle(m.theme.Warning, rowBg)
 				if strings.Contains(repo.LastOp, "ok") {
 					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Success))
 				}
 				if strings.Contains(repo.LastOp, "failed") {
 					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Error))
 				}
-				last = " " + lastStyle.Render("["+trimRight(repo.LastOp, 12)+"]")
+				last = sep + lastStyle.Render("["+trimRight(repo.LastOp, 12)+"]")
 			}
+
 			name := trimRight(repo.Name, nameW)
-			row := fmt.Sprintf("%s %s %s %s%s", cursor, sel, fav, name, last)
-			if idx == m.cursor && m.focus == focusRepos {
-				row = m.fgStyle(m.theme.Accent).Bold(true).Render(row)
-			}
+			row := strings.Join([]string{
+				selStyle.Render(padCell(sel, 3)),
+				favStyle.Render(padCell(fav, 3)),
+				statusStyle.Render(padCell(status.Symbol(), 6)),
+				nameStyle.Render(trimRight(name, nameW)),
+			}, sep)
+			row += last
 			lines = append(lines, row)
 		}
 	}
@@ -584,9 +681,11 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 	if m.isFavorite(r.Path) {
 		favorite = "yes"
 	}
+	status := m.repoStatus(r.Path)
 	lines := []string{
 		m.labelValue("Name", r.Name, width),
 		m.labelValue("Path", r.Path, width),
+		m.labelValue("Status", status.Description(), width),
 		m.labelValue("Last", lastOp, width),
 		m.labelValue("Favorite", favorite, width),
 		m.labelValue("Fav List", m.activeFavoriteList, width),
@@ -634,14 +733,14 @@ func (m Model) View() string {
 		selectorH = min(9, max(5, len(m.themeNames)+3))
 		bodyH = max(6, bodyH-selectorH)
 	}
-	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, bodyH-3)), lw, bodyH, m.focus == focusRepos)
+	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, bodyH-2)), lw, bodyH, m.focus == focusRepos)
 
 	body := leftPanel
 	if rw > 0 {
 		infoH := min(8, max(5, bodyH/3))
 		outputH := max(5, bodyH-infoH)
-		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-3)), rw, infoH, m.focus == focusInfo)
-		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, rw-2), max(1, outputH-3)), rw, outputH, m.focus == focusOutput)
+		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, m.focus == focusInfo)
+		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, rw-2), max(1, outputH-2)), rw, outputH, m.focus == focusOutput)
 		rightPanel := lipgloss.JoinVertical(lipgloss.Left, infoPanel, outputPanel)
 		gutter := m.renderGutter(bodyH)
 		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
@@ -713,6 +812,12 @@ func (m Model) fgStyle(color string) lipgloss.Style {
 		Background(lipgloss.Color(m.theme.Background))
 }
 
+func (m Model) fgBgStyle(color string, bg string) lipgloss.Style {
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Background(lipgloss.Color(bg))
+}
+
 func (m Model) bgStyle() lipgloss.Style {
 	return lipgloss.NewStyle().
 		Background(lipgloss.Color(m.theme.Background))
@@ -752,7 +857,7 @@ func (m Model) padBackground(content string, width int, height int) string {
 }
 
 func (m Model) renderThemeSelector(width int, height int) string {
-	rows := max(1, height-3)
+	rows := max(1, height-2)
 	lines := []string{}
 	if len(m.themeNames) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no themes available)"))
@@ -787,7 +892,7 @@ func (m Model) renderFavoritesDialog(base string) string {
 	screenH := max(1, m.height-2)
 	dialogW := min(max(36, screenW-8), 76)
 	dialogH := min(max(12, screenH-6), 22)
-	dialog := m.renderSection(7, "Favorites Lists", m.favoritesDialogView(max(1, dialogW-4), max(1, dialogH-3)), dialogW, dialogH, true)
+	dialog := m.renderSection(7, "Favorites Lists", m.favoritesDialogView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
 
 	top := max(0, (screenH-dialogH)/2)
 	left := max(0, (screenW-dialogW)/2)
@@ -1369,6 +1474,7 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 	if len(m.repos) == 1 {
 		m.cursor = 0
 	}
+	m.refreshRepoStatus(path)
 	m.normalizeCursor()
 	m.persist()
 	return true, nil
@@ -1479,6 +1585,52 @@ func trimRight(s string, width int) string {
 		return string(r[:width])
 	}
 	return string(r[:width-3]) + "..."
+}
+
+func padCell(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	s = trimRight(s, width)
+	padding := width - lipgloss.Width(s)
+	if padding <= 0 {
+		return s
+	}
+	return s + strings.Repeat(" ", padding)
+}
+
+func (m Model) indentBody(body string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	const indent = 1
+	lines := strings.Split(body, "\n")
+	paddingWidth := min(indent, width)
+	prefix := m.bgStyle().Render(strings.Repeat(" ", paddingWidth))
+	for i, line := range lines {
+		if width <= paddingWidth {
+			lines[i] = prefix
+			continue
+		}
+		lines[i] = prefix + styledTrimRight(line, width-paddingWidth)
+	}
+	if len(lines) == 0 {
+		return m.bgStyle().Render(strings.Repeat(" ", width))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func styledTrimRight(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	if width <= 3 {
+		return truncate.String(s, uint(width))
+	}
+	return truncate.StringWithTail(s, uint(width), "...")
 }
 
 func max(a, b int) int {

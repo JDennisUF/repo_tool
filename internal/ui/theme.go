@@ -17,21 +17,22 @@ type themeConfig struct {
 }
 
 type themePalette struct {
-	Background  string `json:"background"`
-	Foreground  string `json:"foreground"`
-	Muted       string `json:"muted"`
-	Border      string `json:"border"`
-	BorderFocus string `json:"borderFocus"`
-	Header      string `json:"header"`
-	Accent      string `json:"accent"`
-	Selection   string `json:"selection"`
-	Success     string `json:"success"`
-	Error       string `json:"error"`
-	Warning     string `json:"warning"`
-	Status      string `json:"status"`
-	StatusText  string `json:"statusText"`
-	Cursor      string `json:"cursor"`
-	Input       string `json:"input"`
+	Background    string `json:"background"`
+	Foreground    string `json:"foreground"`
+	Muted         string `json:"muted"`
+	Border        string `json:"border"`
+	BorderFocus   string `json:"borderFocus"`
+	Header        string `json:"header"`
+	Accent        string `json:"accent"`
+	Selection     string `json:"selection"`
+	Success       string `json:"success"`
+	Error         string `json:"error"`
+	Warning       string `json:"warning"`
+	Status        string `json:"status"`
+	StatusText    string `json:"statusText"`
+	Cursor        string `json:"cursor"`
+	Input         string `json:"input"`
+	RowFocusBg    string `json:"rowFocusBg"`
 }
 
 type themeSet struct {
@@ -186,6 +187,9 @@ func (p themePalette) withDefaults() themePalette {
 	if p.Input == "" {
 		p.Input = f.Input
 	}
+	if p.RowFocusBg == "" {
+		p.RowFocusBg = f.RowFocusBg
+	}
 	return p
 }
 
@@ -206,5 +210,6 @@ func fallbackTheme() themePalette {
 		StatusText:  "#FFFFFF",
 		Cursor:      "#60A5FA",
 		Input:       "#C084FC",
+		RowFocusBg:  "#111827",
 	}
 }
