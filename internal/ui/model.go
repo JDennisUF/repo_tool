@@ -348,6 +348,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.normalizeCursor()
 				m.persist()
 			}
+		case "r":
+			if idx, ok := m.currentRepoIndex(); ok {
+				repo := m.repos[idx]
+				m.refreshRepoStatus(repo.Path)
+				m.status = fmt.Sprintf("Refreshed repo status: %s", repo.Name)
+				m.logInfo(fmt.Sprintf("refresh: %s (%s)", repo.Name, repo.Path))
+			}
+		case "R":
+			m.refreshRepoStatuses()
+			m.status = fmt.Sprintf("Refreshed statuses for %d repositories", len(m.repos))
+			m.logInfo(fmt.Sprintf("refresh all: %d repositories", len(m.repos)))
 		case "a":
 			for i := range m.repos {
 				m.repos[i].Selected = true
@@ -831,7 +842,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  l lists  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  r/R refresh  l lists  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1030,6 +1041,10 @@ func (m Model) helpView() string {
 		"  f               Toggle favorites-only filter",
 		"  F               Toggle favorite on highlighted repo",
 		"  l               Open favorites list dialog",
+		"",
+		"Refresh",
+		"  r               Refresh highlighted repo status",
+		"  R               Refresh all repo statuses",
 		"",
 		"Selection",
 		"  a               Select all repos",
