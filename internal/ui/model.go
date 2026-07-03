@@ -663,17 +663,6 @@ func (m Model) buildReposContent(width int, rows int) string {
 				nameStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 			}
 			branchStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
-			syncStyle := m.fgBgStyle(m.theme.Muted, rowBg)
-			if meta.HasUpstream {
-				switch {
-				case meta.AheadCount == 0 && meta.BehindCount == 0:
-					syncStyle = m.fgBgStyle(m.theme.Success, rowBg).Bold(true)
-				case meta.BehindCount > 0:
-					syncStyle = m.fgBgStyle(m.theme.Warning, rowBg).Bold(true)
-				case meta.AheadCount > 0:
-					syncStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
-				}
-			}
 			if focused {
 				branchStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 			}
@@ -700,7 +689,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 				favStyle.Render(padCell(fav, 3)),
 				nameStyle.Render(padCell(name, nameW)),
 				statusStyle.Render(padCell(status.Symbol(), 6)),
-				syncStyle.Render(padCell(formatSyncCounts(meta), syncW)),
+				m.renderSyncCell(meta, rowBg, syncW),
 				branchStyle.Render(padCell(branch, branchW)),
 			}, sep)
 			row += last
@@ -1729,6 +1718,17 @@ func padCell(s string, width int) string {
 	return s + strings.Repeat(" ", padding)
 }
 
+func padStyledCell(s string, width int, bg string) string {
+	if width <= 0 {
+		return ""
+	}
+	padding := width - lipgloss.Width(s)
+	if padding <= 0 {
+		return s
+	}
+	return s + lipgloss.NewStyle().Background(lipgloss.Color(bg)).Render(strings.Repeat(" ", padding))
+}
+
 func (m Model) indentBody(body string, width int) string {
 	if width <= 0 {
 		return ""
@@ -1788,6 +1788,24 @@ func formatSyncCounts(meta gitutil.RepoMetadata) string {
 		return fmt.Sprintf("↑%d", meta.AheadCount)
 	}
 	return fmt.Sprintf("↓%d", meta.BehindCount)
+}
+
+func (m Model) renderSyncCell(meta gitutil.RepoMetadata, rowBg string, width int) string {
+	if !meta.HasUpstream {
+		return m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell("-", width))
+	}
+	if meta.AheadCount == 0 && meta.BehindCount == 0 {
+		return m.fgBgStyle(m.theme.Success, rowBg).Bold(true).Render(padCell("✓", width))
+	}
+
+	content := ""
+	if meta.AheadCount > 0 {
+		content += m.fgBgStyle(m.theme.Success, rowBg).Bold(true).Render(fmt.Sprintf("↑%d", meta.AheadCount))
+	}
+	if meta.BehindCount > 0 {
+		content += m.fgBgStyle(m.theme.Error, rowBg).Bold(true).Render(fmt.Sprintf("↓%d", meta.BehindCount))
+	}
+	return padStyledCell(content, width, rowBg)
 }
 
 func max(a, b int) int {

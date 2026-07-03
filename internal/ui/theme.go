@@ -69,7 +69,8 @@ func loadThemeSet() themeSet {
 
 func mergedThemeConfig() themeConfig {
 	cfg := defaultThemeConfig()
-	if userCfg, err := readUserThemeConfig(); err == nil && len(userCfg.Themes) > 0 {
+	if userCfg, err := readUserThemeConfig(); err == nil {
+		userCfg = normalizeUserThemeConfig(userCfg, cfg.Themes)
 		if cfg.Themes == nil {
 			cfg.Themes = map[string]themePalette{}
 		}
@@ -87,18 +88,29 @@ func mergedThemeConfig() themeConfig {
 }
 
 func saveActiveTheme(name string) error {
-	cfg := mergedThemeConfig()
-	name = resolveThemeName(cfg.Themes, name)
-	cfg.ActiveTheme = name
 	configDir, err := os.UserConfigDir()
 	if err != nil {
 		return err
 	}
 	path := filepath.Join(configDir, "rt", "themes.json")
+	baseCfg := defaultThemeConfig()
+	userCfg, err := readUserThemeConfig()
+	if err != nil {
+		userCfg = themeConfig{}
+	}
+	userCfg = normalizeUserThemeConfig(userCfg, baseCfg.Themes)
+	mergedThemes := make(map[string]themePalette, len(baseCfg.Themes)+len(userCfg.Themes))
+	for themeName, palette := range baseCfg.Themes {
+		mergedThemes[themeName] = palette
+	}
+	for themeName, palette := range userCfg.Themes {
+		mergedThemes[themeName] = palette
+	}
+	userCfg.ActiveTheme = resolveThemeName(mergedThemes, name)
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(cfg, "", "  ")
+	data, err := json.MarshalIndent(userCfg, "", "  ")
 	if err != nil {
 		return err
 	}
@@ -162,6 +174,21 @@ func resolveThemeName(themes map[string]themePalette, requested string) string {
 		}
 	}
 	return requested
+}
+
+func normalizeUserThemeConfig(cfg themeConfig, builtIns map[string]themePalette) themeConfig {
+	normalized := themeConfig{
+		ActiveTheme: resolveThemeName(builtIns, cfg.ActiveTheme),
+		Themes:      map[string]themePalette{},
+	}
+	for name, palette := range cfg.Themes {
+		canonical := resolveThemeName(builtIns, name)
+		if _, isBuiltIn := builtIns[canonical]; isBuiltIn {
+			continue
+		}
+		normalized.Themes[canonical] = palette
+	}
+	return normalized
 }
 
 func readUserThemeConfig() (themeConfig, error) {
