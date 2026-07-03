@@ -15,6 +15,9 @@ type RepoMetadata struct {
 	Status        RepoStatus
 	CurrentBranch string
 	LocalBranches []string
+	AheadCount    int
+	BehindCount   int
+	HasUpstream   bool
 }
 
 const (
@@ -118,6 +121,7 @@ func InspectRepoMetadata(path string) RepoMetadata {
 		CurrentBranch: currentBranch(path),
 		LocalBranches: localBranches(path),
 	}
+	meta.AheadCount, meta.BehindCount, meta.HasUpstream = upstreamDivergence(path)
 	return meta
 }
 
@@ -164,4 +168,27 @@ func localBranches(path string) []string {
 	}
 	sort.Strings(branches)
 	return branches
+}
+
+func upstreamDivergence(path string) (ahead int, behind int, hasUpstream bool) {
+	cmd := exec.Command("git", "-C", path, "rev-list", "--left-right", "--count", "@{upstream}...HEAD")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return 0, 0, false
+	}
+
+	fields := strings.Fields(strings.TrimSpace(stdout.String()))
+	if len(fields) != 2 {
+		return 0, 0, false
+	}
+
+	if _, err := fmt.Sscanf(fields[0], "%d", &behind); err != nil {
+		return 0, 0, false
+	}
+	if _, err := fmt.Sscanf(fields[1], "%d", &ahead); err != nil {
+		return 0, 0, false
+	}
+
+	return ahead, behind, true
 }

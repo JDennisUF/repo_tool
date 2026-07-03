@@ -471,20 +471,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // outPanelHeight returns how many output lines are visible given current terminal height.
 func (m *Model) outPanelHeight() int {
 	bodyH := max(8, m.height-4)
-	if m.rightWidth() == 0 {
+	if m.width < 64 {
 		return max(1, bodyH-4)
 	}
-	infoH := min(8, max(5, bodyH/3))
-	outputH := max(5, bodyH-infoH)
+	topH := max(8, bodyH*2/3)
+	outputH := max(5, bodyH-topH)
 	return max(1, outputH-4)
 }
 
-// leftWidth and rightWidth split the terminal roughly 50/50 with a 1-char gutter.
+// leftWidth and rightWidth split the top row with more room for the repo list.
 func (m *Model) leftWidth() int {
 	if m.width < 64 {
 		return m.width
 	}
-	return m.width/2 - 1
+	return (m.width*2)/3 - 1
 }
 
 func (m *Model) rightWidth() int {
@@ -577,11 +577,13 @@ func (m Model) repoMetadata(path string) gitutil.RepoMetadata {
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
-	nameW := max(6, width-15)
+	branchW := 12
+	syncW := 7
+	nameW := max(6, min(28, width-(3+1+3+1+6+1+syncW+1+branchW+1)))
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(
-			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("St", 6)+" "+trimRight("Name ("+m.activeFavoriteList+")", nameW),
+			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Branch", branchW),
 			width,
 		)),
 	}
@@ -594,7 +596,8 @@ func (m Model) buildReposContent(width int, rows int) string {
 	} else {
 		for _, idx := range visible {
 			repo := m.repos[idx]
-			status := m.repoStatus(repo.Path)
+			meta := m.repoMetadata(repo.Path)
+			status := meta.Status
 			focused := idx == m.cursor && m.focus == focusRepos
 			rowBg := m.theme.Background
 			if focused {
@@ -637,6 +640,21 @@ func (m Model) buildReposContent(width int, rows int) string {
 			if focused {
 				nameStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 			}
+			branchStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
+			syncStyle := m.fgBgStyle(m.theme.Muted, rowBg)
+			if meta.HasUpstream {
+				switch {
+				case meta.AheadCount == 0 && meta.BehindCount == 0:
+					syncStyle = m.fgBgStyle(m.theme.Success, rowBg).Bold(true)
+				case meta.BehindCount > 0:
+					syncStyle = m.fgBgStyle(m.theme.Warning, rowBg).Bold(true)
+				case meta.AheadCount > 0:
+					syncStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+				}
+			}
+			if focused {
+				branchStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+			}
 
 			last := ""
 			if repo.LastOp != "" {
@@ -651,11 +669,17 @@ func (m Model) buildReposContent(width int, rows int) string {
 			}
 
 			name := trimRight(repo.Name, nameW)
+			branch := trimRight(meta.CurrentBranch, branchW)
+			if branch == "" {
+				branch = "-"
+			}
 			row := strings.Join([]string{
 				selStyle.Render(padCell(sel, 3)),
 				favStyle.Render(padCell(fav, 3)),
+				nameStyle.Render(padCell(name, nameW)),
 				statusStyle.Render(padCell(status.Symbol(), 6)),
-				nameStyle.Render(trimRight(name, nameW)),
+				syncStyle.Render(padCell(formatSyncCounts(meta), syncW)),
+				branchStyle.Render(padCell(branch, branchW)),
 			}, sep)
 			row += last
 			lines = append(lines, row)
@@ -706,11 +730,11 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 		m.labelValue("Favorite", favorite, width),
 		m.labelValue("Fav List", m.activeFavoriteList, width),
 	}
+	lines = append(lines, m.labelValue("Branches", "", width))
 	if len(meta.LocalBranches) == 0 {
-		lines = append(lines, m.labelValue("Branches", "(none)", width))
+		lines = append(lines, m.labelValue("", "(none)", width))
 	} else {
-		lines = append(lines, m.labelValue("Branches", meta.LocalBranches[0], width))
-		for _, branch := range meta.LocalBranches[1:] {
+		for _, branch := range meta.LocalBranches {
 			lines = append(lines, m.labelValue("", branch, width))
 		}
 	}
@@ -757,17 +781,22 @@ func (m Model) View() string {
 		selectorH = min(9, max(5, len(m.themeNames)+3))
 		bodyH = max(6, bodyH-selectorH)
 	}
-	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, bodyH-2)), lw, bodyH, m.focus == focusRepos)
+	topH := bodyH
+	outputH := 0
+	if m.width >= 64 {
+		topH = max(8, bodyH*2/3)
+		outputH = max(5, bodyH-topH)
+	}
+
+	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, topH-2)), lw, topH, m.focus == focusRepos)
 
 	body := leftPanel
 	if rw > 0 {
-		infoH := min(8, max(5, bodyH/3))
-		outputH := max(5, bodyH-infoH)
-		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, m.focus == focusInfo)
-		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, rw-2), max(1, outputH-2)), rw, outputH, m.focus == focusOutput)
-		rightPanel := lipgloss.JoinVertical(lipgloss.Left, infoPanel, outputPanel)
-		gutter := m.renderGutter(bodyH)
-		body = lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
+		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, m.focus == focusInfo)
+		gutter := m.renderGutter(topH)
+		topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, infoPanel)
+		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+		body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 	}
 	if m.themeSelecting {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderThemeSelector(max(1, m.width), selectorH))
@@ -1669,6 +1698,22 @@ func formatLastUpdated(value string) string {
 		return value
 	}
 	return ts.Local().Format("2006-01-02 15:04")
+}
+
+func formatSyncCounts(meta gitutil.RepoMetadata) string {
+	if !meta.HasUpstream {
+		return "-"
+	}
+	if meta.AheadCount == 0 && meta.BehindCount == 0 {
+		return "✓"
+	}
+	if meta.AheadCount > 0 && meta.BehindCount > 0 {
+		return fmt.Sprintf("↑%d↓%d", meta.AheadCount, meta.BehindCount)
+	}
+	if meta.AheadCount > 0 {
+		return fmt.Sprintf("↑%d", meta.AheadCount)
+	}
+	return fmt.Sprintf("↓%d", meta.BehindCount)
 }
 
 func max(a, b int) int {

@@ -73,6 +73,44 @@ func TestInspectRepoMetadataBranches(t *testing.T) {
 	}
 }
 
+func TestInspectRepoMetadataUpstreamDivergence(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+
+	seed := t.TempDir()
+	runGit(t, "", "init", seed)
+	writeFile(t, filepath.Join(seed, "tracked.txt"), "hello\n")
+	runGit(t, seed, "add", "tracked.txt")
+	runGit(t, seed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, "", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	clone1 := filepath.Join(t.TempDir(), "clone1")
+	clone2 := filepath.Join(t.TempDir(), "clone2")
+	runGit(t, "", "clone", remote, clone1)
+	runGit(t, "", "clone", remote, clone2)
+
+	writeFile(t, filepath.Join(clone1, "ahead.txt"), "ahead\n")
+	runGit(t, clone1, "add", "ahead.txt")
+	runGit(t, clone1, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "ahead")
+
+	writeFile(t, filepath.Join(clone2, "behind.txt"), "behind\n")
+	runGit(t, clone2, "add", "behind.txt")
+	runGit(t, clone2, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "behind")
+	runGit(t, clone2, "push")
+	runGit(t, clone1, "fetch", "origin")
+
+	meta := InspectRepoMetadata(clone1)
+	if !meta.HasUpstream {
+		t.Fatal("expected upstream metadata")
+	}
+	if meta.AheadCount != 1 || meta.BehindCount != 1 {
+		t.Fatalf("ahead/behind = %d/%d, want 1/1", meta.AheadCount, meta.BehindCount)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -82,7 +120,11 @@ func initTestRepo(t *testing.T) string {
 
 func runGit(t *testing.T, repo string, args ...string) {
 	t.Helper()
-	cmd := exec.Command("git", append([]string{"-C", repo}, args...)...)
+	gitArgs := args
+	if repo != "" {
+		gitArgs = append([]string{"-C", repo}, args...)
+	}
+	cmd := exec.Command("git", gitArgs...)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("git %v failed: %v\n%s", args, err, string(out))
 	}
