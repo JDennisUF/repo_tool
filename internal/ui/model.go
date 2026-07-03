@@ -597,7 +597,15 @@ func (m Model) buildReposContent(width int, rows int) string {
 	} else if len(visible) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos in current favorites view)"))
 	} else {
-		for _, idx := range visible {
+		availableRows := rows - len(lines)
+		if m.inputMode != inputNone {
+			availableRows -= 3
+		}
+		if availableRows < 1 {
+			availableRows = 1
+		}
+		start, end := repoViewportRange(visible, m.cursor, availableRows)
+		for _, idx := range visible[start:end] {
 			repo := m.repos[idx]
 			meta := m.repoMetadata(repo.Path)
 			status := meta.Status
@@ -1321,6 +1329,42 @@ func (m *Model) moveRepoCursor(delta int) {
 		next = len(visible) - 1
 	}
 	m.cursor = visible[next]
+}
+
+func repoViewportRange(visible []int, cursor int, rows int) (start int, end int) {
+	if len(visible) == 0 {
+		return 0, 0
+	}
+	if rows <= 0 || rows >= len(visible) {
+		return 0, len(visible)
+	}
+
+	cursorPos := 0
+	for i, idx := range visible {
+		if idx == cursor {
+			cursorPos = i
+			break
+		}
+	}
+
+	start = cursorPos - rows + 1
+	if start < 0 {
+		start = 0
+	}
+	end = start + rows
+	if end > len(visible) {
+		end = len(visible)
+		start = max(0, end-rows)
+	}
+	if cursorPos < start {
+		start = cursorPos
+		end = min(len(visible), start+rows)
+	}
+	if cursorPos >= end {
+		end = cursorPos + 1
+		start = max(0, end-rows)
+	}
+	return start, end
 }
 
 func (m *Model) openFavoritesDialog() {
