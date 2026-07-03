@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 //go:embed themes.json
@@ -17,22 +18,22 @@ type themeConfig struct {
 }
 
 type themePalette struct {
-	Background    string `json:"background"`
-	Foreground    string `json:"foreground"`
-	Muted         string `json:"muted"`
-	Border        string `json:"border"`
-	BorderFocus   string `json:"borderFocus"`
-	Header        string `json:"header"`
-	Accent        string `json:"accent"`
-	Selection     string `json:"selection"`
-	Success       string `json:"success"`
-	Error         string `json:"error"`
-	Warning       string `json:"warning"`
-	Status        string `json:"status"`
-	StatusText    string `json:"statusText"`
-	Cursor        string `json:"cursor"`
-	Input         string `json:"input"`
-	RowFocusBg    string `json:"rowFocusBg"`
+	Background  string `json:"background"`
+	Foreground  string `json:"foreground"`
+	Muted       string `json:"muted"`
+	Border      string `json:"border"`
+	BorderFocus string `json:"borderFocus"`
+	Header      string `json:"header"`
+	Accent      string `json:"accent"`
+	Selection   string `json:"selection"`
+	Success     string `json:"success"`
+	Error       string `json:"error"`
+	Warning     string `json:"warning"`
+	Status      string `json:"status"`
+	StatusText  string `json:"statusText"`
+	Cursor      string `json:"cursor"`
+	Input       string `json:"input"`
+	RowFocusBg  string `json:"rowFocusBg"`
 }
 
 type themeSet struct {
@@ -43,15 +44,15 @@ type themeSet struct {
 
 func loadThemeSet() themeSet {
 	cfg := mergedThemeConfig()
-	name := cfg.ActiveTheme
+	name := resolveThemeName(cfg.Themes, cfg.ActiveTheme)
 	if envName := os.Getenv("RT_THEME"); envName != "" {
-		name = envName
+		name = resolveThemeName(cfg.Themes, envName)
 	}
 	if _, ok := cfg.Themes[name]; !ok {
-		name = cfg.ActiveTheme
+		name = resolveThemeName(cfg.Themes, cfg.ActiveTheme)
 	}
 	if _, ok := cfg.Themes[name]; !ok {
-		name = "fallback"
+		name = "Fallback"
 		cfg.Themes[name] = fallbackTheme()
 	}
 
@@ -80,13 +81,14 @@ func mergedThemeConfig() themeConfig {
 		}
 	}
 	if cfg.ActiveTheme == "" {
-		cfg.ActiveTheme = "graphite"
+		cfg.ActiveTheme = "Graphite"
 	}
 	return cfg
 }
 
 func saveActiveTheme(name string) error {
 	cfg := mergedThemeConfig()
+	name = resolveThemeName(cfg.Themes, name)
 	cfg.ActiveTheme = name
 	configDir, err := os.UserConfigDir()
 	if err != nil {
@@ -106,11 +108,11 @@ func saveActiveTheme(name string) error {
 func defaultThemeConfig() themeConfig {
 	data, err := themeFiles.ReadFile("themes.json")
 	if err != nil {
-		return themeConfig{ActiveTheme: "fallback", Themes: map[string]themePalette{"fallback": fallbackTheme()}}
+		return themeConfig{ActiveTheme: "Fallback", Themes: map[string]themePalette{"Fallback": fallbackTheme()}}
 	}
 	var cfg themeConfig
 	if err := json.Unmarshal(data, &cfg); err != nil {
-		return themeConfig{ActiveTheme: "fallback", Themes: map[string]themePalette{"fallback": fallbackTheme()}}
+		return themeConfig{ActiveTheme: "Fallback", Themes: map[string]themePalette{"Fallback": fallbackTheme()}}
 	}
 	return cfg
 }
@@ -120,8 +122,46 @@ func sortedThemeNames(themes map[string]themePalette) []string {
 	for name := range themes {
 		names = append(names, name)
 	}
-	sort.Strings(names)
+	sort.Slice(names, func(i, j int) bool {
+		li := strings.ToLower(names[i])
+		lj := strings.ToLower(names[j])
+		if li == lj {
+			return names[i] < names[j]
+		}
+		return li < lj
+	})
 	return names
+}
+
+func resolveThemeName(themes map[string]themePalette, requested string) string {
+	if requested == "" {
+		return requested
+	}
+	if _, ok := themes[requested]; ok {
+		return requested
+	}
+
+	aliases := map[string]string{
+		"aurora":   "Aurora",
+		"cobalt":   "Cobalt",
+		"daylight": "Daylight",
+		"ember":    "Ember",
+		"graphite": "Graphite",
+		"violet":   "Violet",
+		"fallback": "Fallback",
+	}
+	if canonical, ok := aliases[strings.ToLower(requested)]; ok {
+		if _, exists := themes[canonical]; exists {
+			return canonical
+		}
+	}
+
+	for name := range themes {
+		if strings.EqualFold(name, requested) {
+			return name
+		}
+	}
+	return requested
 }
 
 func readUserThemeConfig() (themeConfig, error) {
