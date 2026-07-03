@@ -20,8 +20,10 @@ type Repo struct {
 	LastOp   string `json:"lastOp,omitempty"`
 }
 
-type persistedState struct {
-	Repos []Repo `json:"repos"`
+type State struct {
+	Repos              []Repo              `json:"repos"`
+	FavoriteLists      map[string][]string `json:"favoriteLists,omitempty"`
+	ActiveFavoriteList string              `json:"activeFavoriteList,omitempty"`
 }
 
 type Store struct {
@@ -36,21 +38,21 @@ func New() (*Store, error) {
 	return &Store{path: filepath.Join(configDir, appName, configFile)}, nil
 }
 
-func (s *Store) Load() ([]Repo, error) {
+func (s *Store) Load() (State, error) {
 	data, err := os.ReadFile(s.path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return []Repo{}, nil
+			return defaultState(), nil
 		}
-		return nil, err
+		return State{}, err
 	}
 
-	var state persistedState
+	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
-		return nil, err
+		return State{}, err
 	}
 
-	normalized := make([]Repo, 0, len(state.Repos))
+	normalizedRepos := make([]Repo, 0, len(state.Repos))
 	seen := map[string]struct{}{}
 	for _, r := range state.Repos {
 		if r.Path == "" {
@@ -64,27 +66,81 @@ func (s *Store) Load() ([]Repo, error) {
 		if r.Name == "" {
 			r.Name = filepath.Base(cleanPath)
 		}
-		normalized = append(normalized, r)
+		normalizedRepos = append(normalizedRepos, r)
 		seen[cleanPath] = struct{}{}
 	}
 
-	sort.Slice(normalized, func(i, j int) bool {
-		return normalized[i].Name < normalized[j].Name
+	sort.Slice(normalizedRepos, func(i, j int) bool {
+		return normalizedRepos[i].Name < normalizedRepos[j].Name
 	})
 
-	return normalized, nil
+	state.Repos = normalizedRepos
+	state.FavoriteLists = normalizeFavoriteLists(state.FavoriteLists)
+	if state.ActiveFavoriteList == "" {
+		state.ActiveFavoriteList = defaultFavoriteListName
+	}
+	if _, ok := state.FavoriteLists[state.ActiveFavoriteList]; !ok {
+		state.FavoriteLists[state.ActiveFavoriteList] = []string{}
+	}
+
+	return state, nil
 }
 
-func (s *Store) Save(repos []Repo) error {
+func (s *Store) Save(state State) error {
 	if err := os.MkdirAll(filepath.Dir(s.path), 0o755); err != nil {
 		return err
 	}
 
-	state := persistedState{Repos: repos}
 	data, err := json.MarshalIndent(state, "", "  ")
 	if err != nil {
 		return err
 	}
 
 	return os.WriteFile(s.path, data, 0o644)
+}
+
+const defaultFavoriteListName = "default"
+
+func defaultState() State {
+	return State{
+		Repos:              []Repo{},
+		FavoriteLists:      map[string][]string{defaultFavoriteListName: []string{}},
+		ActiveFavoriteList: defaultFavoriteListName,
+	}
+}
+
+func normalizeFavoriteLists(lists map[string][]string) map[string][]string {
+	normalized := make(map[string][]string)
+	if len(lists) == 0 {
+		normalized[defaultFavoriteListName] = []string{}
+		return normalized
+	}
+
+	for name, paths := range lists {
+		cleanName := name
+		if cleanName == "" {
+			continue
+		}
+		seen := map[string]struct{}{}
+		cleanPaths := make([]string, 0, len(paths))
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			cleanPath := filepath.Clean(path)
+			if _, ok := seen[cleanPath]; ok {
+				continue
+			}
+			seen[cleanPath] = struct{}{}
+			cleanPaths = append(cleanPaths, cleanPath)
+		}
+		sort.Strings(cleanPaths)
+		normalized[cleanName] = cleanPaths
+	}
+
+	if len(normalized) == 0 {
+		normalized[defaultFavoriteListName] = []string{}
+	}
+
+	return normalized
 }

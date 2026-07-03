@@ -27,6 +27,8 @@ const (
 	inputScan
 )
 
+const defaultFavoriteListName = "default"
+
 type focusSection int
 
 const (
@@ -79,18 +81,31 @@ type Model struct {
 	output    []outputLine
 	outScroll int // index of first visible line
 
-	store          *store.Store
-	textInput      textinput.Model
-	inputMode      inputMode
-	theme          themePalette
-	themeName      string
-	themes         map[string]themePalette
-	themeNames     []string
-	themeSelecting bool
-	themeCursor    int
-	savedTheme     themePalette
-	savedThemeName string
+	store               *store.Store
+	textInput           textinput.Model
+	inputMode           inputMode
+	theme               themePalette
+	themeName           string
+	themes              map[string]themePalette
+	themeNames          []string
+	themeSelecting      bool
+	themeCursor         int
+	savedTheme          themePalette
+	savedThemeName      string
+	favoriteLists       map[string]map[string]struct{}
+	activeFavoriteList  string
+	favoritesOnly       bool
+	favoritesDialog     bool
+	favoritesDialogMode favoritesDialogMode
+	favoritesListCursor int
 }
+
+type favoritesDialogMode int
+
+const (
+	favoritesDialogSelect favoritesDialogMode = iota
+	favoritesDialogCreate
+)
 
 func NewModel() Model {
 	ti := textinput.New()
@@ -115,13 +130,26 @@ func NewModel() Model {
 		return m
 	}
 
-	repos, loadErr := s.Load()
+	state, loadErr := s.Load()
 	if loadErr != nil {
 		m.status = fmt.Sprintf("Load error: %v", loadErr)
 		return m
 	}
-	m.repos = repos
-	m.logInfo(fmt.Sprintf("Loaded %d repositories", len(repos)))
+	m.repos = state.Repos
+	m.favoriteLists = favoriteListsFromState(state.FavoriteLists)
+	m.activeFavoriteList = state.ActiveFavoriteList
+	if m.activeFavoriteList == "" {
+		m.activeFavoriteList = defaultFavoriteListName
+	}
+	if len(m.favoriteLists) == 0 {
+		m.favoriteLists = map[string]map[string]struct{}{
+			defaultFavoriteListName: {},
+		}
+	}
+	if _, ok := m.favoriteLists[m.activeFavoriteList]; !ok {
+		m.favoriteLists[m.activeFavoriteList] = map[string]struct{}{}
+	}
+	m.logInfo(fmt.Sprintf("Loaded %d repositories", len(state.Repos)))
 	return m
 }
 
@@ -239,6 +267,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.favoritesDialog {
+			return m.handleFavoritesDialog(msg)
+		}
 		if m.inputMode != inputNone {
 			return m.handleInputMode(msg)
 		}
@@ -265,26 +296,47 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFocus(focusInfo)
 		case "2":
 			m.setFocus(focusOutput)
-		case "left", "h":
+		case "left":
 			m.cycleFocus(-1)
-		case "right", "l":
+		case "right":
 			m.cycleFocus(1)
 		case "up", "k":
 			if m.focus == focusOutput {
 				m.outScroll = max(0, m.outScroll-1)
-			} else if m.cursor > 0 {
-				m.cursor--
+			} else {
+				m.moveRepoCursor(-1)
 			}
 		case "down", "j":
 			if m.focus == focusOutput {
 				limit := max(0, len(m.output)-m.outPanelHeight())
 				m.outScroll = min(m.outScroll+1, limit)
-			} else if m.cursor < len(m.repos)-1 {
-				m.cursor++
+			} else {
+				m.moveRepoCursor(1)
 			}
 		case " ":
-			if len(m.repos) > 0 {
-				m.repos[m.cursor].Selected = !m.repos[m.cursor].Selected
+			if idx, ok := m.currentRepoIndex(); ok {
+				m.repos[idx].Selected = !m.repos[idx].Selected
+				m.persist()
+			}
+		case "f":
+			m.favoritesOnly = !m.favoritesOnly
+			m.normalizeCursor()
+			if m.favoritesOnly {
+				m.status = fmt.Sprintf("Favorites filter enabled: %s", m.activeFavoriteList)
+			} else {
+				m.status = "Favorites filter disabled"
+			}
+		case "F":
+			if idx, ok := m.currentRepoIndex(); ok {
+				repo := m.repos[idx]
+				if m.toggleFavorite(repo.Path) {
+					m.status = fmt.Sprintf("Favorited %s in %s", repo.Name, m.activeFavoriteList)
+					m.logInfo(fmt.Sprintf("favorite added: %s -> %s", repo.Name, m.activeFavoriteList))
+				} else {
+					m.status = fmt.Sprintf("Unfavorited %s from %s", repo.Name, m.activeFavoriteList)
+					m.logInfo(fmt.Sprintf("favorite removed: %s -> %s", repo.Name, m.activeFavoriteList))
+				}
+				m.normalizeCursor()
 				m.persist()
 			}
 		case "a":
@@ -306,6 +358,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.showHelp = !m.showHelp
 		case "T":
 			m.openThemeSelector()
+		case "l":
+			m.openFavoritesDialog()
 		case "o":
 			m.inputMode = inputAddOne
 			m.textInput.SetValue("")
@@ -338,24 +392,25 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollToBottom(m.outPanelHeight())
 			return m, pullSelectedCmd(selected)
 		case "x":
-			if len(m.repos) == 0 {
+			idx, ok := m.currentRepoIndex()
+			if !ok {
 				return m, nil
 			}
-			removed := m.repos[m.cursor]
-			m.repos = append(m.repos[:m.cursor], m.repos[m.cursor+1:]...)
-			if m.cursor > 0 && m.cursor >= len(m.repos) {
-				m.cursor = len(m.repos) - 1
-			}
+			removed := m.repos[idx]
+			m.repos = append(m.repos[:idx], m.repos[idx+1:]...)
+			m.removeRepoFromFavorites(removed.Path)
+			m.normalizeCursor()
 			m.persist()
 			m.status = fmt.Sprintf("Removed: %s", removed.Name)
 			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, removed.Path))
 			return m, nil
 		case "z":
-			if len(m.repos) == 0 {
+			idx, ok := m.currentRepoIndex()
+			if !ok {
 				m.status = "No repository highlighted"
 				return m, nil
 			}
-			repo := m.repos[m.cursor]
+			repo := m.repos[idx]
 			cmd := exec.Command("lazygit")
 			cmd.Dir = repo.Path
 			cmd.Stdin = os.Stdin
@@ -368,21 +423,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return lazygitExitedMsg{err: err}
 			})
 		case "v":
-			if len(m.repos) == 0 {
+			idx, ok := m.currentRepoIndex()
+			if !ok {
 				m.status = "No repository highlighted"
 				return m, nil
 			}
-			repo := m.repos[m.cursor]
+			repo := m.repos[idx]
 			m.status = fmt.Sprintf("Opening VS Code: %s", repo.Name)
 			m.logInfo(fmt.Sprintf("code: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
 			return m, openEditorCmd("VS Code", "code", repo)
 		case "Z":
-			if len(m.repos) == 0 {
+			idx, ok := m.currentRepoIndex()
+			if !ok {
 				m.status = "No repository highlighted"
 				return m, nil
 			}
-			repo := m.repos[m.cursor]
+			repo := m.repos[idx]
 			m.status = fmt.Sprintf("Opening Zed: %s", repo.Name)
 			m.logInfo(fmt.Sprintf("zed: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
@@ -456,21 +513,29 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 
 func (m Model) buildReposContent(width int, rows int) string {
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight("Sel  Name", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight(fmt.Sprintf("Sel Fav Name (%s)", m.activeFavoriteList), width)),
 	}
 
+	visible := m.visibleRepoIndexes()
 	if len(m.repos) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add or s to scan)"))
+	} else if len(visible) == 0 {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos in current favorites view)"))
 	} else {
-		nameW := max(6, width-15)
-		for i, repo := range m.repos {
+		nameW := max(6, width-19)
+		for _, idx := range visible {
+			repo := m.repos[idx]
 			cursor := " "
-			if i == m.cursor {
+			if idx == m.cursor {
 				cursor = m.fgStyle(m.theme.Cursor).Bold(true).Render(">")
 			}
 			sel := "[ ]"
 			if repo.Selected {
 				sel = m.fgStyle(m.theme.Selection).Bold(true).Render("[x]")
+			}
+			fav := " "
+			if m.isFavorite(repo.Path) {
+				fav = m.fgStyle(m.theme.Accent).Bold(true).Render("*")
 			}
 			last := ""
 			if repo.LastOp != "" {
@@ -484,8 +549,8 @@ func (m Model) buildReposContent(width int, rows int) string {
 				last = " " + lastStyle.Render("["+trimRight(repo.LastOp, 12)+"]")
 			}
 			name := trimRight(repo.Name, nameW)
-			row := fmt.Sprintf("%s %s %s%s", cursor, sel, name, last)
-			if i == m.cursor && m.focus == focusRepos {
+			row := fmt.Sprintf("%s %s %s %s%s", cursor, sel, fav, name, last)
+			if idx == m.cursor && m.focus == focusRepos {
 				row = m.fgStyle(m.theme.Accent).Bold(true).Render(row)
 			}
 			lines = append(lines, row)
@@ -505,19 +570,26 @@ func (m Model) buildReposContent(width int, rows int) string {
 }
 
 func (m Model) buildRepoInfoContent(width int, rows int) string {
-	if len(m.repos) == 0 || width < 10 {
+	idx, ok := m.currentRepoIndex()
+	if !ok || width < 10 {
 		return m.fgStyle(m.theme.Muted).Render("(no repo selected)")
 	}
 
-	r := m.repos[m.cursor]
+	r := m.repos[idx]
 	lastOp := r.LastOp
 	if lastOp == "" {
 		lastOp = "none"
+	}
+	favorite := "no"
+	if m.isFavorite(r.Path) {
+		favorite = "yes"
 	}
 	lines := []string{
 		m.labelValue("Name", r.Name, width),
 		m.labelValue("Path", r.Path, width),
 		m.labelValue("Last", lastOp, width),
+		m.labelValue("Favorite", favorite, width),
+		m.labelValue("Fav List", m.activeFavoriteList, width),
 	}
 	return strings.Join(limitLines(lines, rows), "\n")
 }
@@ -580,6 +652,9 @@ func (m Model) View() string {
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
 	}
+	if m.favoritesDialog {
+		body = m.renderFavoritesDialog(body)
+	}
 
 	// ---------- status bar ----------
 	busy := "idle"
@@ -590,10 +665,10 @@ func (m Model) View() string {
 		Foreground(lipgloss.Color(m.theme.StatusText)).
 		Background(lipgloss.Color(m.theme.Status)).
 		Width(max(1, m.width)).
-		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName)
+		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  left/right cycle panels  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  l lists  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -706,14 +781,88 @@ func (m Model) renderThemeSelector(width int, height int) string {
 	return m.renderSection(9, "Theme Selector", body, width, height, true)
 }
 
+func (m Model) renderFavoritesDialog(base string) string {
+	_ = base
+	screenW := max(1, m.width)
+	screenH := max(1, m.height-2)
+	dialogW := min(max(36, screenW-8), 76)
+	dialogH := min(max(12, screenH-6), 22)
+	dialog := m.renderSection(7, "Favorites Lists", m.favoritesDialogView(max(1, dialogW-4), max(1, dialogH-3)), dialogW, dialogH, true)
+
+	top := max(0, (screenH-dialogH)/2)
+	left := max(0, (screenW-dialogW)/2)
+	dialogLines := strings.Split(dialog, "\n")
+	bg := m.bgStyle()
+	lines := make([]string, screenH)
+	for i := range lines {
+		if i < top || i >= top+len(dialogLines) {
+			lines[i] = bg.Render(strings.Repeat(" ", screenW))
+			continue
+		}
+		dialogLine := dialogLines[i-top]
+		right := max(0, screenW-left-lipgloss.Width(dialogLine))
+		lines[i] = bg.Render(strings.Repeat(" ", left)) + dialogLine + bg.Render(strings.Repeat(" ", right))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) favoritesDialogView(width int, rows int) string {
+	lists := m.favoriteListNames()
+	lines := []string{
+		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=use  n=new  x=delete  Esc=close", width)),
+		"",
+	}
+
+	if len(lists) == 0 {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no favorites lists)"))
+	} else {
+		start := 0
+		visibleRows := max(1, rows-5)
+		if m.favoritesListCursor >= visibleRows {
+			start = m.favoritesListCursor - visibleRows + 1
+		}
+		end := min(start+visibleRows, len(lists))
+		for i := start; i < end; i++ {
+			name := lists[i]
+			style := m.fgStyle(m.theme.Foreground)
+			marker := "  "
+			if i == m.favoritesListCursor {
+				marker = "> "
+				style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+			}
+			active := " "
+			if name == m.activeFavoriteList {
+				active = "*"
+			}
+			count := len(m.favoriteLists[name])
+			lines = append(lines, style.Render(trimRight(fmt.Sprintf("%s%s %s (%d)", marker, active, name, count), width)))
+		}
+	}
+
+	if m.favoritesDialogMode == favoritesDialogCreate {
+		lines = append(lines,
+			"",
+			m.fgStyle(m.theme.Input).Render(trimRight("New list: "+m.textInput.View(), width)),
+			m.fgStyle(m.theme.Muted).Render(trimRight("Enter=create  Esc=cancel", width)),
+		)
+	}
+
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
 func (m Model) helpView() string {
 	return strings.Join([]string{
 		"rt help",
 		"",
 		"Navigation",
 		"  j/k or up/down  Move highlight",
-		"  h/l or left/right  Cycle focused panel",
+		"  left/right      Cycle focused panel",
 		"  space           Toggle selection on highlighted repo",
+		"",
+		"Favorites",
+		"  f               Toggle favorites-only filter",
+		"  F               Toggle favorite on highlighted repo",
+		"  l               Open favorites list dialog",
 		"",
 		"Selection",
 		"  a               Select all repos",
@@ -822,6 +971,305 @@ func limitLines(lines []string, maxLines int) []string {
 	return lines[:maxLines]
 }
 
+func favoriteListsFromState(lists map[string][]string) map[string]map[string]struct{} {
+	normalized := make(map[string]map[string]struct{})
+	if len(lists) == 0 {
+		normalized[defaultFavoriteListName] = map[string]struct{}{}
+		return normalized
+	}
+	for name, paths := range lists {
+		if name == "" {
+			continue
+		}
+		set := make(map[string]struct{}, len(paths))
+		for _, path := range paths {
+			if path == "" {
+				continue
+			}
+			set[path] = struct{}{}
+		}
+		normalized[name] = set
+	}
+	if len(normalized) == 0 {
+		normalized[defaultFavoriteListName] = map[string]struct{}{}
+	}
+	return normalized
+}
+
+func (m Model) favoriteListsForStore() map[string][]string {
+	lists := make(map[string][]string, len(m.favoriteLists))
+	for name, members := range m.favoriteLists {
+		paths := make([]string, 0, len(members))
+		for path := range members {
+			paths = append(paths, path)
+		}
+		sort.Strings(paths)
+		lists[name] = paths
+	}
+	if len(lists) == 0 {
+		lists[defaultFavoriteListName] = []string{}
+	}
+	return lists
+}
+
+func (m Model) favoriteListNames() []string {
+	names := make([]string, 0, len(m.favoriteLists))
+	for name := range m.favoriteLists {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (m *Model) currentFavoriteSet() map[string]struct{} {
+	if m.favoriteLists == nil {
+		m.favoriteLists = map[string]map[string]struct{}{}
+	}
+	set, ok := m.favoriteLists[m.activeFavoriteList]
+	if !ok {
+		set = map[string]struct{}{}
+		m.favoriteLists[m.activeFavoriteList] = set
+	}
+	return set
+}
+
+func (m Model) isFavorite(path string) bool {
+	set := m.favoriteLists[m.activeFavoriteList]
+	if set == nil {
+		return false
+	}
+	_, ok := set[path]
+	return ok
+}
+
+func (m *Model) toggleFavorite(path string) bool {
+	set := m.currentFavoriteSet()
+	if _, ok := set[path]; ok {
+		delete(set, path)
+		return false
+	}
+	set[path] = struct{}{}
+	return true
+}
+
+func (m *Model) removeRepoFromFavorites(path string) {
+	for _, set := range m.favoriteLists {
+		delete(set, path)
+	}
+}
+
+func (m Model) visibleRepoIndexes() []int {
+	indexes := make([]int, 0, len(m.repos))
+	for i, repo := range m.repos {
+		if m.favoritesOnly && !m.isFavorite(repo.Path) {
+			continue
+		}
+		indexes = append(indexes, i)
+	}
+	return indexes
+}
+
+func (m Model) currentRepoIndex() (int, bool) {
+	if len(m.repos) == 0 {
+		return 0, false
+	}
+	if !m.favoritesOnly {
+		if m.cursor < 0 || m.cursor >= len(m.repos) {
+			return 0, false
+		}
+		return m.cursor, true
+	}
+	for _, idx := range m.visibleRepoIndexes() {
+		if idx == m.cursor {
+			return idx, true
+		}
+	}
+	return 0, false
+}
+
+func (m *Model) normalizeCursor() {
+	if len(m.repos) == 0 {
+		m.cursor = 0
+		return
+	}
+	if !m.favoritesOnly {
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		if m.cursor >= len(m.repos) {
+			m.cursor = len(m.repos) - 1
+		}
+		return
+	}
+	visible := m.visibleRepoIndexes()
+	if len(visible) == 0 {
+		if m.cursor >= len(m.repos) {
+			m.cursor = len(m.repos) - 1
+		}
+		if m.cursor < 0 {
+			m.cursor = 0
+		}
+		return
+	}
+	for _, idx := range visible {
+		if idx == m.cursor {
+			return
+		}
+	}
+	m.cursor = visible[0]
+}
+
+func (m *Model) moveRepoCursor(delta int) {
+	visible := m.visibleRepoIndexes()
+	if len(visible) == 0 {
+		return
+	}
+	position := 0
+	found := false
+	for i, idx := range visible {
+		if idx == m.cursor {
+			position = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.cursor = visible[0]
+		return
+	}
+	next := position + delta
+	if next < 0 {
+		next = 0
+	}
+	if next >= len(visible) {
+		next = len(visible) - 1
+	}
+	m.cursor = visible[next]
+}
+
+func (m *Model) openFavoritesDialog() {
+	if len(m.favoriteLists) == 0 {
+		m.favoriteLists = map[string]map[string]struct{}{
+			defaultFavoriteListName: {},
+		}
+	}
+	m.favoritesDialog = true
+	m.favoritesDialogMode = favoritesDialogSelect
+	m.textInput.Blur()
+	m.textInput.SetValue("")
+	m.favoritesListCursor = 0
+	for i, name := range m.favoriteListNames() {
+		if name == m.activeFavoriteList {
+			m.favoritesListCursor = i
+			break
+		}
+	}
+	m.status = "Favorites lists: Enter selects, n creates, x deletes, Esc closes"
+}
+
+func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.favoritesDialogMode == favoritesDialogCreate {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.favoritesDialogMode = favoritesDialogSelect
+			m.textInput.Blur()
+			m.textInput.SetValue("")
+			m.status = "Favorites list creation canceled"
+			return m, nil
+		case "enter":
+			name := strings.TrimSpace(m.textInput.Value())
+			m.textInput.Blur()
+			m.textInput.SetValue("")
+			m.favoritesDialogMode = favoritesDialogSelect
+			if name == "" {
+				m.status = "Favorites list name required"
+				return m, nil
+			}
+			if _, ok := m.favoriteLists[name]; ok {
+				m.status = fmt.Sprintf("Favorites list already exists: %s", name)
+				return m, nil
+			}
+			m.favoriteLists[name] = map[string]struct{}{}
+			m.activeFavoriteList = name
+			m.persist()
+			m.openFavoritesDialog()
+			m.status = fmt.Sprintf("Created favorites list: %s", name)
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q", "l":
+		m.favoritesDialog = false
+		m.status = "Closed favorites lists"
+	case "up", "k":
+		m.moveFavoritesListCursor(-1)
+	case "down", "j":
+		m.moveFavoritesListCursor(1)
+	case "enter":
+		if name, ok := m.highlightedFavoriteListName(); ok {
+			m.activeFavoriteList = name
+			m.normalizeCursor()
+			m.persist()
+			m.favoritesDialog = false
+			m.status = fmt.Sprintf("Using favorites list: %s", name)
+		}
+	case "n":
+		m.favoritesDialogMode = favoritesDialogCreate
+		m.textInput.SetValue("")
+		m.textInput.Focus()
+		m.status = "Create favorites list: enter name"
+	case "x":
+		if name, ok := m.highlightedFavoriteListName(); ok {
+			if len(m.favoriteLists) == 1 {
+				m.status = "Cannot delete the only favorites list"
+				return m, nil
+			}
+			delete(m.favoriteLists, name)
+			if m.activeFavoriteList == name {
+				m.activeFavoriteList = m.favoriteListNames()[0]
+			}
+			m.normalizeCursor()
+			m.persist()
+			if m.favoritesListCursor >= len(m.favoriteLists) {
+				m.favoritesListCursor = max(0, len(m.favoriteLists)-1)
+			}
+			m.status = fmt.Sprintf("Deleted favorites list: %s", name)
+		}
+	}
+	return m, nil
+}
+
+func (m *Model) moveFavoritesListCursor(delta int) {
+	names := m.favoriteListNames()
+	if len(names) == 0 {
+		m.favoritesListCursor = 0
+		return
+	}
+	m.favoritesListCursor = (m.favoritesListCursor + delta + len(names)) % len(names)
+}
+
+func (m Model) highlightedFavoriteListName() (string, bool) {
+	names := m.favoriteListNames()
+	if len(names) == 0 {
+		return "", false
+	}
+	if m.favoritesListCursor < 0 {
+		return names[0], true
+	}
+	if m.favoritesListCursor >= len(names) {
+		return names[len(names)-1], true
+	}
+	return names[m.favoritesListCursor], true
+}
+
 func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "esc":
@@ -921,6 +1369,7 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 	if len(m.repos) == 1 {
 		m.cursor = 0
 	}
+	m.normalizeCursor()
 	m.persist()
 	return true, nil
 }
@@ -929,7 +1378,12 @@ func (m *Model) persist() {
 	if m.store == nil {
 		return
 	}
-	if err := m.store.Save(m.repos); err != nil {
+	state := store.State{
+		Repos:              m.repos,
+		FavoriteLists:      m.favoriteListsForStore(),
+		ActiveFavoriteList: m.activeFavoriteList,
+	}
+	if err := m.store.Save(state); err != nil {
 		m.status = fmt.Sprintf("Save error: %v", err)
 	}
 }
