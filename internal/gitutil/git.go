@@ -5,10 +5,17 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"sort"
 	"strings"
 )
 
 type RepoStatus int
+
+type RepoMetadata struct {
+	Status        RepoStatus
+	CurrentBranch string
+	LocalBranches []string
+}
 
 const (
 	StatusNotCloned RepoStatus = iota
@@ -88,21 +95,34 @@ func Pull(path string) (string, error) {
 }
 
 func InspectStatus(path string) RepoStatus {
+	return InspectRepoMetadata(path).Status
+}
+
+func InspectRepoMetadata(path string) RepoMetadata {
 	if _, err := os.Stat(path); err != nil {
-		return StatusNotCloned
+		return RepoMetadata{Status: StatusNotCloned}
 	}
 	if !IsGitRepo(path) {
-		return StatusNotCloned
+		return RepoMetadata{Status: StatusNotCloned}
 	}
 
 	cmd := exec.Command("git", "-C", path, "status", "--porcelain")
 	var stdout bytes.Buffer
 	cmd.Stdout = &stdout
 	if err := cmd.Run(); err != nil {
-		return StatusNotCloned
+		return RepoMetadata{Status: StatusNotCloned}
 	}
 
-	output := strings.TrimSpace(stdout.String())
+	meta := RepoMetadata{
+		Status:        inspectPorcelainStatus(strings.TrimSpace(stdout.String())),
+		CurrentBranch: currentBranch(path),
+		LocalBranches: localBranches(path),
+	}
+	return meta
+}
+
+func inspectPorcelainStatus(output string) RepoStatus {
+	output = strings.TrimSpace(output)
 	if output == "" {
 		return StatusCurrent
 	}
@@ -114,4 +134,34 @@ func InspectStatus(path string) RepoStatus {
 	}
 
 	return StatusUncommittedChanges
+}
+
+func currentBranch(path string) string {
+	cmd := exec.Command("git", "-C", path, "branch", "--show-current")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return ""
+	}
+	return strings.TrimSpace(stdout.String())
+}
+
+func localBranches(path string) []string {
+	cmd := exec.Command("git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/heads")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name := strings.TrimSpace(line)
+		if name == "" {
+			continue
+		}
+		branches = append(branches, name)
+	}
+	sort.Strings(branches)
+	return branches
 }

@@ -52,10 +52,10 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 
 	in := State{
 		Repos: []Repo{
-			{Name: "repo", Path: "/tmp/repo", Selected: true, LastOp: "pull ok"},
+			{Name: "repo", Path: "/tmp/repo", Selected: true, LastOp: "pull ok", LastUpdated: "2026-07-02T10:11:12Z"},
 		},
 		FavoriteLists: map[string][]string{
-			"work":    {"/tmp/repo", "/tmp/repo"},
+			"work":     {"/tmp/repo", "/tmp/repo"},
 			"personal": {"/tmp/other"},
 		},
 		ActiveFavoriteList: "work",
@@ -77,5 +77,8 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	}
 	if got := out.FavoriteLists["personal"]; len(got) != 1 || got[0] != "/tmp/other" {
 		t.Fatalf("personal favorites = %#v, want [/tmp/other]", got)
+	}
+	if out.Repos[0].LastUpdated != "2026-07-02T10:11:12Z" {
+		t.Fatalf("last updated = %q, want %q", out.Repos[0].LastUpdated, "2026-07-02T10:11:12Z")
 	}
 }

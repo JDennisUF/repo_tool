@@ -14,10 +14,11 @@ const (
 )
 
 type Repo struct {
-	Name     string `json:"name"`
-	Path     string `json:"path"`
-	Selected bool   `json:"selected"`
-	LastOp   string `json:"lastOp,omitempty"`
+	Name        string `json:"name"`
+	Path        string `json:"path"`
+	Selected    bool   `json:"selected"`
+	LastOp      string `json:"lastOp,omitempty"`
+	LastUpdated string `json:"lastUpdated,omitempty"`
 }
 
 type State struct {

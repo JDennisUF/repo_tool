@@ -100,7 +100,7 @@ type Model struct {
 	favoritesDialog     bool
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
-	repoStatuses        map[string]gitutil.RepoStatus
+	repoMeta            map[string]gitutil.RepoMetadata
 }
 
 type favoritesDialogMode int
@@ -238,6 +238,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
 				} else {
 					m.repos[i].LastOp = "pull ok"
+					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
 					successes++
 					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
 				}
@@ -407,7 +408,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			removed := m.repos[idx]
 			m.repos = append(m.repos[:idx], m.repos[idx+1:]...)
 			m.removeRepoFromFavorites(removed.Path)
-			delete(m.repoStatuses, removed.Path)
+			delete(m.repoMeta, removed.Path)
 			m.normalizeCursor()
 			m.persist()
 			m.status = fmt.Sprintf("Removed: %s", removed.Name)
@@ -539,33 +540,40 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 }
 
 func (m *Model) refreshRepoStatuses() {
-	if m.repoStatuses == nil {
-		m.repoStatuses = make(map[string]gitutil.RepoStatus, len(m.repos))
+	if m.repoMeta == nil {
+		m.repoMeta = make(map[string]gitutil.RepoMetadata, len(m.repos))
 	}
 	valid := make(map[string]struct{}, len(m.repos))
 	for _, repo := range m.repos {
 		valid[repo.Path] = struct{}{}
-		m.repoStatuses[repo.Path] = gitutil.InspectStatus(repo.Path)
+		m.repoMeta[repo.Path] = gitutil.InspectRepoMetadata(repo.Path)
 	}
-	for path := range m.repoStatuses {
+	for path := range m.repoMeta {
 		if _, ok := valid[path]; !ok {
-			delete(m.repoStatuses, path)
+			delete(m.repoMeta, path)
 		}
 	}
 }
 
 func (m *Model) refreshRepoStatus(path string) {
-	if m.repoStatuses == nil {
-		m.repoStatuses = map[string]gitutil.RepoStatus{}
+	if m.repoMeta == nil {
+		m.repoMeta = map[string]gitutil.RepoMetadata{}
 	}
-	m.repoStatuses[path] = gitutil.InspectStatus(path)
+	m.repoMeta[path] = gitutil.InspectRepoMetadata(path)
 }
 
 func (m Model) repoStatus(path string) gitutil.RepoStatus {
-	if status, ok := m.repoStatuses[path]; ok {
-		return status
+	if meta, ok := m.repoMeta[path]; ok {
+		return meta.Status
 	}
 	return gitutil.StatusNotCloned
+}
+
+func (m Model) repoMetadata(path string) gitutil.RepoMetadata {
+	if meta, ok := m.repoMeta[path]; ok {
+		return meta
+	}
+	return gitutil.RepoMetadata{Status: gitutil.StatusNotCloned}
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
@@ -573,7 +581,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(
-			padCell("Sel", 3)+" "+padCell("Fav", 3)+" "+padCell("St", 6)+" "+trimRight("Name ("+m.activeFavoriteList+")", nameW),
+			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("St", 6)+" "+trimRight("Name ("+m.activeFavoriteList+")", nameW),
 			width,
 		)),
 	}
@@ -673,6 +681,7 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 	}
 
 	r := m.repos[idx]
+	meta := m.repoMetadata(r.Path)
 	lastOp := r.LastOp
 	if lastOp == "" {
 		lastOp = "none"
@@ -681,14 +690,29 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 	if m.isFavorite(r.Path) {
 		favorite = "yes"
 	}
-	status := m.repoStatus(r.Path)
+	status := meta.Status
+	currentBranch := meta.CurrentBranch
+	if currentBranch == "" {
+		currentBranch = "(none)"
+	}
+	lastUpdated := formatLastUpdated(r.LastUpdated)
 	lines := []string{
 		m.labelValue("Name", r.Name, width),
 		m.labelValue("Path", r.Path, width),
+		m.labelValue("Branch", currentBranch, width),
 		m.labelValue("Status", status.Description(), width),
+		m.labelValue("Updated", lastUpdated, width),
 		m.labelValue("Last", lastOp, width),
 		m.labelValue("Favorite", favorite, width),
 		m.labelValue("Fav List", m.activeFavoriteList, width),
+	}
+	if len(meta.LocalBranches) == 0 {
+		lines = append(lines, m.labelValue("Branches", "(none)", width))
+	} else {
+		lines = append(lines, m.labelValue("Branches", meta.LocalBranches[0], width))
+		for _, branch := range meta.LocalBranches[1:] {
+			lines = append(lines, m.labelValue("", branch, width))
+		}
 	}
 	return strings.Join(limitLines(lines, rows), "\n")
 }
@@ -1004,6 +1028,9 @@ func (m Model) labelValue(label string, value string, width int) string {
 	labelStyle := m.fgStyle(m.theme.Accent).Bold(true)
 	valueStyle := m.fgStyle(m.theme.Foreground)
 	prefix := label + ": "
+	if label == "" {
+		prefix = "  "
+	}
 	return labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, max(1, width-len(prefix))))
 }
 
@@ -1631,6 +1658,17 @@ func styledTrimRight(s string, width int) string {
 		return truncate.String(s, uint(width))
 	}
 	return truncate.StringWithTail(s, uint(width), "...")
+}
+
+func formatLastUpdated(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "never"
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return value
+	}
+	return ts.Local().Format("2006-01-02 15:04")
 }
 
 func max(a, b int) int {

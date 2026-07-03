@@ -50,6 +50,29 @@ func TestInspectStatusUntrackedFiles(t *testing.T) {
 	}
 }
 
+func TestInspectRepoMetadataBranches(t *testing.T) {
+	repo := initTestRepo(t)
+	writeFile(t, filepath.Join(repo, "tracked.txt"), "hello\n")
+	runGit(t, repo, "add", "tracked.txt")
+	runGit(t, repo, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, repo, "checkout", "-b", "feature/test")
+	runGit(t, repo, "branch", "bugfix/test")
+
+	meta := InspectRepoMetadata(repo)
+	if meta.Status != StatusCurrent {
+		t.Fatalf("status = %v, want %v", meta.Status, StatusCurrent)
+	}
+	if meta.CurrentBranch != "feature/test" {
+		t.Fatalf("current branch = %q, want %q", meta.CurrentBranch, "feature/test")
+	}
+	if len(meta.LocalBranches) < 3 {
+		t.Fatalf("local branch count = %d, want at least 3 (%v)", len(meta.LocalBranches), meta.LocalBranches)
+	}
+	if !containsString(meta.LocalBranches, "bugfix/test") || !containsString(meta.LocalBranches, "feature/test") {
+		t.Fatalf("local branches = %v, want bugfix/test and feature/test", meta.LocalBranches)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
@@ -70,4 +93,13 @@ func writeFile(t *testing.T, path string, content string) {
 	if err := os.WriteFile(path, []byte(content), 0o644); err != nil {
 		t.Fatalf("write %s: %v", path, err)
 	}
+}
+
+func containsString(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }
