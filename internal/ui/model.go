@@ -530,8 +530,11 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 
 	content := m.padBackground(m.indentBody(body, innerW), innerW, innerH)
 	lines := strings.Split(content, "\n")
+	contentStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Foreground)).
+		Background(lipgloss.Color(m.theme.Background))
 	for i, line := range lines {
-		lines[i] = borderStyle.Render(border.Left) + line + borderStyle.Render(border.Right)
+		lines[i] = borderStyle.Render(border.Left) + contentStyle.Render(line) + borderStyle.Render(border.Right)
 	}
 
 	bottom := borderStyle.Render(border.BottomLeft + strings.Repeat(border.Bottom, innerW) + border.BottomRight)
@@ -1009,9 +1012,7 @@ func (m Model) favoritesDialogView(width int, rows int) string {
 }
 
 func (m Model) helpView() string {
-	return strings.Join([]string{
-		"rt help",
-		"",
+	raw := []string{
 		"Navigation",
 		"  j/k or up/down  Move highlight",
 		"  left/right      Cycle focused panel",
@@ -1037,7 +1038,7 @@ func (m Model) helpView() string {
 		"",
 		"Output panel",
 		"  2               Focus command output panel",
-		"  j/k             Scroll output when output panel is focused",
+		"  j/k             Scroll command output panel",
 		"  PgUp / PgDn     Scroll command output panel",
 		"",
 		"UI",
@@ -1050,7 +1051,21 @@ func (m Model) helpView() string {
 		"  q / Ctrl+C      Quit",
 		"",
 		"Press Enter, Esc, or ? to close",
-	}, "\n")
+	}
+	lines := make([]string, 0, len(raw))
+	for _, line := range raw {
+		switch {
+		case line == "":
+			lines = append(lines, "")
+		case !strings.HasPrefix(line, " "):
+			lines = append(lines, m.fgStyle(m.theme.Accent).Bold(true).Render(line))
+		case strings.HasPrefix(line, "Press "):
+			lines = append(lines, m.fgStyle(m.theme.Muted).Render(line))
+		default:
+			lines = append(lines, m.fgStyle(m.theme.Foreground).Render(line))
+		}
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) labelValue(label string, value string, width int) string {
