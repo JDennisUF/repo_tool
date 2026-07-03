@@ -49,6 +49,13 @@ type lazygitExitedMsg struct {
 	err error
 }
 
+type vscodeOpenedMsg struct {
+	editor   string
+	repoName string
+	path     string
+	err      error
+}
+
 // outputLine represents a single line in the command output panel.
 type outputLine struct {
 	ts   string
@@ -202,12 +209,32 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case vscodeOpenedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s failed: %v", msg.editor, msg.err)
+			m.logError(strings.ToLower(msg.editor) + ": " + msg.err.Error())
+		} else {
+			m.status = fmt.Sprintf("Opened %s: %s", msg.editor, msg.repoName)
+			m.logInfo(fmt.Sprintf("%s: opened %s (%s)", strings.ToLower(msg.editor), msg.repoName, msg.path))
+		}
+		return m, nil
+
 	case tea.KeyMsg:
 		if m.inputMode != inputNone {
 			return m.handleInputMode(msg)
 		}
 		if m.themeSelecting {
 			return m.handleThemeSelector(msg)
+		}
+		if m.showHelp {
+			switch msg.String() {
+			case "ctrl+c":
+				return m, tea.Quit
+			case "?", "esc", "enter", "q":
+				m.showHelp = false
+				return m, nil
+			}
+			return m, nil
 		}
 
 		switch msg.String() {
@@ -320,6 +347,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return lazygitExitedMsg{err: err}
 			})
+		case "v":
+			if len(m.repos) == 0 {
+				m.status = "No repository highlighted"
+				return m, nil
+			}
+			repo := m.repos[m.cursor]
+			m.status = fmt.Sprintf("Opening VS Code: %s", repo.Name)
+			m.logInfo(fmt.Sprintf("code: opening %s (%s)", repo.Name, repo.Path))
+			m.scrollToBottom(m.outPanelHeight())
+			return m, openEditorCmd("VS Code", "code", repo)
+		case "Z":
+			if len(m.repos) == 0 {
+				m.status = "No repository highlighted"
+				return m, nil
+			}
+			repo := m.repos[m.cursor]
+			m.status = fmt.Sprintf("Opening Zed: %s", repo.Name)
+			m.logInfo(fmt.Sprintf("zed: opening %s (%s)", repo.Name, repo.Path))
+			m.scrollToBottom(m.outPanelHeight())
+			return m, openEditorCmd("Zed", "zed", repo)
 		// Output panel scrolling
 		case "pgup":
 			step := max(1, m.outPanelHeight()-1)
@@ -487,10 +534,6 @@ func (m Model) buildOutputContent(width int, rows int) string {
 }
 
 func (m Model) View() string {
-	if m.showHelp {
-		return m.renderApp(m.helpView())
-	}
-
 	lw := m.leftWidth()
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
@@ -514,6 +557,9 @@ func (m Model) View() string {
 	if m.themeSelecting {
 		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderThemeSelector(max(1, m.width), selectorH))
 	}
+	if m.showHelp {
+		body = m.renderHelpOverlay(body)
+	}
 
 	// ---------- status bar ----------
 	busy := "idle"
@@ -527,8 +573,33 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  ? help  q quit")
+		Render(" [0]/[1]/[2] focus  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
+}
+
+func (m Model) renderHelpOverlay(base string) string {
+	_ = base
+	screenW := max(1, m.width)
+	screenH := max(1, m.height-2)
+	dialogW := min(max(32, screenW-8), 72)
+	dialogH := min(max(18, screenH-6), 27)
+	dialog := m.renderSection(8, "Help", m.helpView(), dialogW, dialogH, true)
+
+	top := max(0, (screenH-dialogH)/2)
+	left := max(0, (screenW-dialogW)/2)
+	dialogLines := strings.Split(dialog, "\n")
+	bg := m.bgStyle()
+	lines := make([]string, screenH)
+	for i := range lines {
+		if i < top || i >= top+len(dialogLines) {
+			lines[i] = bg.Render(strings.Repeat(" ", screenW))
+			continue
+		}
+		dialogLine := dialogLines[i-top]
+		right := max(0, screenW-left-lipgloss.Width(dialogLine))
+		lines[i] = bg.Render(strings.Repeat(" ", left)) + dialogLine + bg.Render(strings.Repeat(" ", right))
+	}
+	return strings.Join(lines, "\n")
 }
 
 func (m Model) renderApp(content string) string {
@@ -633,6 +704,8 @@ func (m Model) helpView() string {
 		"  p               Pull all selected repositories",
 		"  x               Remove highlighted repository from tracking",
 		"  z               Launch lazygit for highlighted repository",
+		"  v               Open highlighted repository in VS Code",
+		"  Z               Open highlighted repository in Zed",
 		"",
 		"Output panel",
 		"  2               Focus command output panel",
@@ -646,7 +719,7 @@ func (m Model) helpView() string {
 		"  ?               Toggle this help screen",
 		"  q / Ctrl+C      Quit",
 		"",
-		"Press ? to close help",
+		"Press Enter, Esc, or ? to close",
 	}, "\n")
 }
 
@@ -873,6 +946,22 @@ func pullSelectedCmd(repos []store.Repo) tea.Cmd {
 
 		wg.Wait()
 		return pullFinishedMsg{results: results}
+	}
+}
+
+func openEditorCmd(editor string, executable string, repo store.Repo) tea.Cmd {
+	return func() tea.Msg {
+		cmd := exec.Command(executable, repo.Path)
+		err := cmd.Start()
+		if err == nil {
+			err = cmd.Process.Release()
+		}
+		return vscodeOpenedMsg{
+			editor:   editor,
+			repoName: repo.Name,
+			path:     repo.Path,
+			err:      err,
+		}
 	}
 }
 

@@ -33,12 +33,15 @@ go build -o rt ./cmd/rt
 - `s`: scan/search a root directory for repos
 - `p`: pull selected repos
 - `z`: launch lazygit on highlighted repo
+- `v`: launch VS Code on highlighted repo
+- `Z`: launch Zed on highlighted repo
 - `0`: focus repositories
 - `1`: focus repo info
 - `2`: focus command output
 - `j`/`k`: scroll command output when output is focused
 - `T`: open the theme selector; `j`/`k` previews, `Enter` selects, `Esc` cancels
-- `?`: show/hide help screen
+- `?`: show/hide help dialog
+- `Enter` or `Esc`: close help dialog
 - `q` or `Ctrl+C`: quit
 
 ## Themes
