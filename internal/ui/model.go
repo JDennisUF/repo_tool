@@ -35,6 +35,8 @@ const (
 	focusOutput
 )
 
+const focusSectionCount = int(focusOutput) + 1
+
 type pullResult struct {
 	path   string
 	output string
@@ -164,6 +166,23 @@ func (m Model) Init() tea.Cmd {
 	return nil
 }
 
+func (m *Model) setFocus(focus focusSection) {
+	m.focus = focus
+	switch focus {
+	case focusRepos:
+		m.status = "Focused [0] Repos"
+	case focusInfo:
+		m.status = "Focused [1] Repo Info"
+	case focusOutput:
+		m.status = "Focused [2] Command Output"
+	}
+}
+
+func (m *Model) cycleFocus(delta int) {
+	next := (int(m.focus) + delta + focusSectionCount) % focusSectionCount
+	m.setFocus(focusSection(next))
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -241,14 +260,15 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "ctrl+c", "q":
 			return m, tea.Quit
 		case "0":
-			m.focus = focusRepos
-			m.status = "Focused [0] Repos"
+			m.setFocus(focusRepos)
 		case "1":
-			m.focus = focusInfo
-			m.status = "Focused [1] Repo Info"
+			m.setFocus(focusInfo)
 		case "2":
-			m.focus = focusOutput
-			m.status = "Focused [2] Command Output"
+			m.setFocus(focusOutput)
+		case "left", "h":
+			m.cycleFocus(-1)
+		case "right", "l":
+			m.cycleFocus(1)
 		case "up", "k":
 			if m.focus == focusOutput {
 				m.outScroll = max(0, m.outScroll-1)
@@ -573,7 +593,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1]/[2] focus  left/right cycle panels  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -692,6 +712,7 @@ func (m Model) helpView() string {
 		"",
 		"Navigation",
 		"  j/k or up/down  Move highlight",
+		"  h/l or left/right  Cycle focused panel",
 		"  space           Toggle selection on highlighted repo",
 		"",
 		"Selection",
@@ -715,6 +736,8 @@ func (m Model) helpView() string {
 		"UI",
 		"  0               Focus repositories",
 		"  1               Focus repo info",
+		"  2               Focus command output",
+		"  Left / Right    Cycle through panels",
 		"  T               Open theme selector",
 		"  ?               Toggle this help screen",
 		"  q / Ctrl+C      Quit",
