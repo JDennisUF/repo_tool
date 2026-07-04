@@ -3,6 +3,7 @@ package ui
 import (
 	"embed"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"sort"
@@ -71,6 +72,7 @@ func mergedThemeConfig() themeConfig {
 	cfg := defaultThemeConfig()
 	if userCfg, err := readUserThemeConfig(); err == nil {
 		userCfg = normalizeUserThemeConfig(userCfg, cfg.Themes)
+		_ = writeUserThemeConfig(userCfg)
 		if cfg.Themes == nil {
 			cfg.Themes = map[string]themePalette{}
 		}
@@ -88,13 +90,11 @@ func mergedThemeConfig() themeConfig {
 }
 
 func saveActiveTheme(name string) error {
-	configDir, err := os.UserConfigDir()
-	if err != nil {
-		return err
-	}
-	path := filepath.Join(configDir, "rt", "themes.json")
 	baseCfg := defaultThemeConfig()
 	userCfg, err := readUserThemeConfig()
+	if err != nil && !errors.Is(err, os.ErrNotExist) {
+		return err
+	}
 	if err != nil {
 		userCfg = themeConfig{}
 	}
@@ -107,10 +107,19 @@ func saveActiveTheme(name string) error {
 		mergedThemes[themeName] = palette
 	}
 	userCfg.ActiveTheme = resolveThemeName(mergedThemes, name)
+	return writeUserThemeConfig(userCfg)
+}
+
+func writeUserThemeConfig(cfg themeConfig) error {
+	configDir, err := os.UserConfigDir()
+	if err != nil {
+		return err
+	}
+	path := filepath.Join(configDir, "rt", "themes.json")
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	data, err := json.MarshalIndent(userCfg, "", "  ")
+	data, err := json.MarshalIndent(cfg, "", "  ")
 	if err != nil {
 		return err
 	}
