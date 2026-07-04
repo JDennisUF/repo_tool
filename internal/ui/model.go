@@ -497,11 +497,6 @@ func (m *Model) outPanelHeight() int {
 
 func (m *Model) repoPanelContentRows() int {
 	bodyH := max(8, m.height-4)
-	selectorH := 0
-	if m.themeSelecting {
-		selectorH = min(9, max(5, len(m.themeNames)+3))
-		bodyH = max(6, bodyH-selectorH)
-	}
 	topH := bodyH
 	if m.width >= 64 {
 		topH = max(8, bodyH*2/3)
@@ -816,7 +811,6 @@ func (m Model) View() string {
 	selectorH := 0
 	if m.themeSelecting {
 		selectorH = min(9, max(5, len(m.themeNames)+3))
-		bodyH = max(6, bodyH-selectorH)
 	}
 	topH := bodyH
 	outputH := 0
@@ -829,14 +823,18 @@ func (m Model) View() string {
 
 	body := leftPanel
 	if rw > 0 {
-		infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, m.focus == focusInfo)
+		rightPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, m.focus == focusInfo)
+		if m.themeSelecting {
+			infoH := max(5, topH-selectorH)
+			selectorBodyH := max(5, topH-infoH)
+			infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, m.focus == focusInfo)
+			themePanel := m.renderThemeSelector(rw, selectorBodyH)
+			rightPanel = lipgloss.JoinVertical(lipgloss.Left, infoPanel, themePanel)
+		}
 		gutter := m.renderGutter(topH)
-		topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, infoPanel)
+		topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
 		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 		body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
-	}
-	if m.themeSelecting {
-		body = lipgloss.JoinVertical(lipgloss.Left, body, m.renderThemeSelector(max(1, m.width), selectorH))
 	}
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)

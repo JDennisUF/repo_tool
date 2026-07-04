@@ -1,6 +1,24 @@
 {
   "activeTheme": "Graphite",
   "themes": {
+    "Apple IIe": {
+      "background": "#151A16",
+      "foreground": "#7FFFD4",
+      "muted": "#4FAF98",
+      "border": "#355C52",
+      "borderFocus": "#A8FFE8",
+      "header": "#A8FFE8",
+      "accent": "#97FFE0",
+      "selection": "#C6FFF0",
+      "success": "#B8FFF0",
+      "error": "#66D9C2",
+      "warning": "#8FEBDD",
+      "status": "#1B211D",
+      "statusText": "#7FFFD4",
+      "cursor": "#C6FFF0",
+      "input": "#A8FFE8",
+      "rowFocusBg": "#23302A"
+    },
     "Aurora": {
       "background": "#08111F",
       "foreground": "#F8FAFC",
@@ -54,6 +72,24 @@
       "cursor": "#93C5FD",
       "input": "#C4B5FD",
       "rowFocusBg": "#245784"
+    },
+    "Commodore 64": {
+      "background": "#2E3F96",
+      "foreground": "#9FB3FF",
+      "muted": "#7F92E8",
+      "border": "#6C7FE0",
+      "borderFocus": "#C5D0FF",
+      "header": "#C5D0FF",
+      "accent": "#B7C5FF",
+      "selection": "#D8E0FF",
+      "success": "#C5D0FF",
+      "error": "#FFB3C1",
+      "warning": "#E8D8A8",
+      "status": "#25357D",
+      "statusText": "#B7C5FF",
+      "cursor": "#D8E0FF",
+      "input": "#C5D0FF",
+      "rowFocusBg": "#4156B7"
     },
     "Daylight": {
       "background": "#FAFAF7",
