@@ -73,6 +73,24 @@
       "input": "#A8E6FF",
       "rowFocusBg": "#2B73C6"
     },
+    "Amber CRT": {
+      "background": "#14110C",
+      "foreground": "#FFB347",
+      "muted": "#A8762A",
+      "border": "#6B4A1A",
+      "borderFocus": "#FFD089",
+      "header": "#FFD089",
+      "accent": "#FFC766",
+      "selection": "#FFE0A8",
+      "success": "#FFD089",
+      "error": "#FF8C42",
+      "warning": "#FFC766",
+      "status": "#1C1710",
+      "statusText": "#FFB347",
+      "cursor": "#FFE0A8",
+      "input": "#FFD089",
+      "rowFocusBg": "#2C2114"
+    },
     "Atari ST": {
       "background": "#D9D9D9",
       "foreground": "#1F1F1F",
@@ -216,6 +234,24 @@
       "cursor": "#58A6FF",
       "input": "#BC8CFF",
       "rowFocusBg": "#1F2937"
+    },
+    "Green Terminal": {
+      "background": "#071407",
+      "foreground": "#6BFF6B",
+      "muted": "#3C9F3C",
+      "border": "#2B6F2B",
+      "borderFocus": "#A8FFA8",
+      "header": "#A8FFA8",
+      "accent": "#8CFF8C",
+      "selection": "#C6FFC6",
+      "success": "#A8FFA8",
+      "error": "#FF7A7A",
+      "warning": "#D6FF8C",
+      "status": "#0B1B0B",
+      "statusText": "#6BFF6B",
+      "cursor": "#C6FFC6",
+      "input": "#A8FFA8",
+      "rowFocusBg": "#132613"
     },
     "Graphite": {
       "background": "#0B0F14",
