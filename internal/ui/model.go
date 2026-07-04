@@ -613,12 +613,13 @@ func (m Model) repoMetadata(path string) gitutil.RepoMetadata {
 
 func (m Model) buildReposContent(width int, rows int) string {
 	branchW := 12
+	updatedW := 5
 	syncW := 7
-	nameW := max(6, min(28, width-(3+1+3+1+6+1+syncW+1+branchW+1)))
+	nameW := max(6, min(28, width-(3+1+3+1+6+1+syncW+1+updatedW+1+branchW+1)))
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(
-			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Branch", branchW),
+			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW),
 			width,
 		)),
 	}
@@ -705,12 +706,14 @@ func (m Model) buildReposContent(width int, rows int) string {
 			if branch == "" {
 				branch = "-"
 			}
+			updated := formatLastUpdatedShort(repo.LastUpdated)
 			row := strings.Join([]string{
 				selStyle.Render(padCell(sel, 3)),
 				favStyle.Render(padCell(fav, 3)),
 				nameStyle.Render(padCell(name, nameW)),
 				statusStyle.Render(padCell(status.Symbol(), 6)),
 				m.renderSyncCell(meta, rowBg, syncW),
+				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(updated, updatedW)),
 				branchStyle.Render(padCell(branch, branchW)),
 			}, sep)
 			row += last
@@ -1824,6 +1827,33 @@ func formatLastUpdated(value string) string {
 		return value
 	}
 	return ts.Local().Format("2006-01-02 15:04")
+}
+
+func formatLastUpdatedShort(value string) string {
+	if strings.TrimSpace(value) == "" {
+		return "-"
+	}
+	ts, err := time.Parse(time.RFC3339, value)
+	if err != nil {
+		return "-"
+	}
+	d := time.Since(ts)
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Hour {
+		minutes := int(d / time.Minute)
+		if minutes < 1 {
+			minutes = 1
+		}
+		return fmt.Sprintf("%dm", minutes)
+	}
+	if d < 24*time.Hour {
+		hours := int(d / time.Hour)
+		return fmt.Sprintf("%dh", hours)
+	}
+	days := int(d / (24 * time.Hour))
+	return fmt.Sprintf("%dd", days)
 }
 
 func formatSyncCounts(meta gitutil.RepoMetadata) string {

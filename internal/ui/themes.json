@@ -55,6 +55,42 @@
       "input": "#D4BFFF",
       "rowFocusBg": "#343F56"
     },
+    "Amiga": {
+      "background": "#0055AA",
+      "foreground": "#E6F3FF",
+      "muted": "#9FC3E6",
+      "border": "#6FA8DC",
+      "borderFocus": "#FFD166",
+      "header": "#FFD166",
+      "accent": "#A8E6FF",
+      "selection": "#FFE29A",
+      "success": "#C6F6C6",
+      "error": "#FFB3BA",
+      "warning": "#FFD166",
+      "status": "#003E7A",
+      "statusText": "#E6F3FF",
+      "cursor": "#FFFFFF",
+      "input": "#A8E6FF",
+      "rowFocusBg": "#2B73C6"
+    },
+    "Atari ST": {
+      "background": "#D9D9D9",
+      "foreground": "#1F1F1F",
+      "muted": "#5F5F5F",
+      "border": "#8A8A8A",
+      "borderFocus": "#2A6F97",
+      "header": "#005F87",
+      "accent": "#2A6F97",
+      "selection": "#A3CEF1",
+      "success": "#2A9D8F",
+      "error": "#C1121F",
+      "warning": "#B7791F",
+      "status": "#BFBFBF",
+      "statusText": "#1F1F1F",
+      "cursor": "#005F87",
+      "input": "#7B2CBF",
+      "rowFocusBg": "#B8D7F0"
+    },
     "Cobalt": {
       "background": "#071426",
       "foreground": "#F8FBFF",
@@ -198,6 +234,24 @@
       "cursor": "#60A5FA",
       "input": "#C084FC",
       "rowFocusBg": "#374151"
+    },
+    "IBM CGA": {
+      "background": "#000000",
+      "foreground": "#55FFFF",
+      "muted": "#AAAAAA",
+      "border": "#55FFFF",
+      "borderFocus": "#FF55FF",
+      "header": "#FF55FF",
+      "accent": "#FFFFFF",
+      "selection": "#FFFF55",
+      "success": "#55FF55",
+      "error": "#FF5555",
+      "warning": "#FFFF55",
+      "status": "#000000",
+      "statusText": "#55FFFF",
+      "cursor": "#FFFFFF",
+      "input": "#FF55FF",
+      "rowFocusBg": "#0000AA"
     },
     "Material Theme Darker": {
       "background": "#212121",
@@ -360,6 +414,24 @@
       "cursor": "#F0ABFC",
       "input": "#93C5FD",
       "rowFocusBg": "#4C2A85"
+    },
+    "ZX Spectrum": {
+      "background": "#000000",
+      "foreground": "#FFFFFF",
+      "muted": "#AAAAAA",
+      "border": "#00AAFF",
+      "borderFocus": "#FFFF00",
+      "header": "#FFFF00",
+      "accent": "#00FFFF",
+      "selection": "#FF00FF",
+      "success": "#00FF00",
+      "error": "#FF0000",
+      "warning": "#FFFF00",
+      "status": "#000000",
+      "statusText": "#FFFFFF",
+      "cursor": "#00FFFF",
+      "input": "#FF00FF",
+      "rowFocusBg": "#0000AA"
     }
   }
 }
