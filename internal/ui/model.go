@@ -70,14 +70,15 @@ type outputLine struct {
 }
 
 type Model struct {
-	repos    []store.Repo
-	cursor   int
-	width    int
-	height   int
-	status   string
-	busy     bool
-	showHelp bool
-	focus    focusSection
+	repos      []store.Repo
+	cursor     int
+	repoScroll int
+	width      int
+	height     int
+	status     string
+	busy       bool
+	showHelp   bool
+	focus      focusSection
 
 	// output panel
 	output    []outputLine
@@ -221,6 +222,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 		m.textInput.Width = max(20, msg.Width/2-10)
+		m.ensureRepoCursorVisible(m.repoPanelContentRows())
 		return m, nil
 
 	case pullFinishedMsg:
@@ -330,6 +332,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "f":
 			m.favoritesOnly = !m.favoritesOnly
 			m.normalizeCursor()
+			m.ensureRepoCursorVisible(m.repoPanelContentRows())
 			if m.favoritesOnly {
 				m.status = fmt.Sprintf("Favorites filter enabled: %s", m.activeFavoriteList)
 			} else {
@@ -346,6 +349,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					m.logInfo(fmt.Sprintf("favorite removed: %s -> %s", repo.Name, m.activeFavoriteList))
 				}
 				m.normalizeCursor()
+				m.ensureRepoCursorVisible(m.repoPanelContentRows())
 				m.persist()
 			}
 		case "r":
@@ -421,6 +425,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.removeRepoFromFavorites(removed.Path)
 			delete(m.repoMeta, removed.Path)
 			m.normalizeCursor()
+			m.ensureRepoCursorVisible(m.repoPanelContentRows())
 			m.persist()
 			m.status = fmt.Sprintf("Removed: %s", removed.Name)
 			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, removed.Path))
@@ -488,6 +493,27 @@ func (m *Model) outPanelHeight() int {
 	topH := max(8, bodyH*2/3)
 	outputH := max(5, bodyH-topH)
 	return max(1, outputH-4)
+}
+
+func (m *Model) repoPanelContentRows() int {
+	bodyH := max(8, m.height-4)
+	selectorH := 0
+	if m.themeSelecting {
+		selectorH = min(9, max(5, len(m.themeNames)+3))
+		bodyH = max(6, bodyH-selectorH)
+	}
+	topH := bodyH
+	if m.width >= 64 {
+		topH = max(8, bodyH*2/3)
+	}
+	rows := max(1, topH-2)
+	if m.inputMode != inputNone {
+		rows -= 3
+	}
+	if rows < 1 {
+		rows = 1
+	}
+	return rows - 1 // reserve one row for the repo header
 }
 
 // leftWidth and rightWidth split the top row with more room for the repo list.
@@ -615,7 +641,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 		if availableRows < 1 {
 			availableRows = 1
 		}
-		start, end := repoViewportRange(visible, m.cursor, availableRows)
+		start, end := repoViewportRange(visible, m.repoScroll, availableRows)
 		for _, idx := range visible[start:end] {
 			repo := m.repos[idx]
 			meta := m.repoMetadata(repo.Path)
@@ -1278,6 +1304,7 @@ func (m Model) currentRepoIndex() (int, bool) {
 func (m *Model) normalizeCursor() {
 	if len(m.repos) == 0 {
 		m.cursor = 0
+		m.repoScroll = 0
 		return
 	}
 	if !m.favoritesOnly {
@@ -1287,6 +1314,7 @@ func (m *Model) normalizeCursor() {
 		if m.cursor >= len(m.repos) {
 			m.cursor = len(m.repos) - 1
 		}
+		m.ensureRepoCursorVisible(m.repoPanelContentRows())
 		return
 	}
 	visible := m.visibleRepoIndexes()
@@ -1297,6 +1325,7 @@ func (m *Model) normalizeCursor() {
 		if m.cursor < 0 {
 			m.cursor = 0
 		}
+		m.ensureRepoCursorVisible(m.repoPanelContentRows())
 		return
 	}
 	for _, idx := range visible {
@@ -1305,6 +1334,7 @@ func (m *Model) normalizeCursor() {
 		}
 	}
 	m.cursor = visible[0]
+	m.ensureRepoCursorVisible(m.repoPanelContentRows())
 }
 
 func (m *Model) moveRepoCursor(delta int) {
@@ -1333,42 +1363,66 @@ func (m *Model) moveRepoCursor(delta int) {
 		next = len(visible) - 1
 	}
 	m.cursor = visible[next]
+	m.ensureRepoCursorVisible(m.repoPanelContentRows())
 }
 
-func repoViewportRange(visible []int, cursor int, rows int) (start int, end int) {
+func repoViewportRange(visible []int, scroll int, rows int) (start int, end int) {
 	if len(visible) == 0 {
 		return 0, 0
 	}
 	if rows <= 0 || rows >= len(visible) {
 		return 0, len(visible)
 	}
-
-	cursorPos := 0
-	for i, idx := range visible {
-		if idx == cursor {
-			cursorPos = i
-			break
-		}
-	}
-
-	start = cursorPos - rows + 1
+	start = scroll
 	if start < 0 {
 		start = 0
 	}
-	end = start + rows
-	if end > len(visible) {
-		end = len(visible)
-		start = max(0, end-rows)
+	maxStart := max(0, len(visible)-rows)
+	if start > maxStart {
+		start = maxStart
 	}
-	if cursorPos < start {
-		start = cursorPos
-		end = min(len(visible), start+rows)
-	}
-	if cursorPos >= end {
-		end = cursorPos + 1
-		start = max(0, end-rows)
-	}
+	end = min(len(visible), start+rows)
 	return start, end
+}
+
+func (m *Model) ensureRepoCursorVisible(rows int) {
+	visible := m.visibleRepoIndexes()
+	if len(visible) == 0 {
+		m.repoScroll = 0
+		return
+	}
+	if rows <= 0 {
+		rows = 1
+	}
+
+	cursorPos := 0
+	found := false
+	for i, idx := range visible {
+		if idx == m.cursor {
+			cursorPos = i
+			found = true
+			break
+		}
+	}
+	if !found {
+		m.repoScroll = 0
+		return
+	}
+
+	if m.repoScroll < 0 {
+		m.repoScroll = 0
+	}
+	if cursorPos < m.repoScroll {
+		m.repoScroll = cursorPos
+	}
+	if cursorPos >= m.repoScroll+rows {
+		m.repoScroll = cursorPos - rows + 1
+	}
+
+	maxScroll := max(0, len(visible)-rows)
+	if m.repoScroll > maxScroll {
+		m.repoScroll = maxScroll
+	}
 }
 
 func (m *Model) openFavoritesDialog() {
