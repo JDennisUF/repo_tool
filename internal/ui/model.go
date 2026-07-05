@@ -432,7 +432,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.setFocus(focusOutput)
 		case "left":
 			m.cycleFocus(-1)
-		case "right":
+		case "right", "tab":
 			m.cycleFocus(1)
 		case "up", "k":
 			if m.focus == focusOutput {
