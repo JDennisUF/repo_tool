@@ -31,7 +31,7 @@ go build -o rt ./cmd/rt
 
 ## Keymap
 
-- `j`/`k` or arrow keys: move highlight
+- `j` | `k` or arrow keys: move highlight
 - `Tab` or right arrow: cycle focus
 - left arrow: cycle focus backward
 - `space`: toggle selection on highlighted repo
@@ -48,13 +48,13 @@ go build -o rt ./cmd/rt
 - `F`: toggle favorite on highlighted repo
 - `l`: open favorites lists
 - `/`: search current surface (repos, theme selector, or command output)
-- `,` or `S`: open settings
+- `,` | `S`: open settings
 - `+`: toggle repo info panel
 - `0`: focus repositories
 - `1`: focus command output
-- `j`/`k`: scroll command output when output is focused
+- `j` | `k`: scroll command output when output is focused
 - `Enter`: maximize command output from repos or output focus; press again to restore
-- `T`: open the theme selector; `j`/`k` previews, `Enter` selects, `Esc` cancels
+- `T`: open the theme selector; `j` | `k` previews, `Enter` selects, `Esc` cancels
 - `?`: show/hide help dialog
 - `Enter` or `Esc`: close help dialog
 - `q` or `Ctrl+C`: quit from anywhere
