@@ -98,3 +98,30 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 		t.Fatal("show repo info should persist")
 	}
 }
+
+func TestSaveLoadPreservesDisabledRepoInfo(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.json")
+	s := &Store{path: path}
+
+	in := State{
+		Settings: Settings{
+			ShowGitCommands: false,
+			ShowRepoInfo:    false,
+		},
+	}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+
+	if out.Settings.ShowRepoInfo {
+		t.Fatal("show repo info should remain false after reload")
+	}
+}

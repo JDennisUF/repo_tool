@@ -30,8 +30,8 @@ type State struct {
 }
 
 type Settings struct {
-	ShowGitCommands bool `json:"showGitCommands,omitempty"`
-	ShowRepoInfo    bool `json:"showRepoInfo,omitempty"`
+	ShowGitCommands bool `json:"showGitCommands"`
+	ShowRepoInfo    bool `json:"showRepoInfo"`
 }
 
 type Store struct {

@@ -282,14 +282,18 @@ func (m *Model) openSearchMode() {
 }
 
 func (m Model) searchStatus(query string) string {
-	label := "repos"
-	switch m.searchScope {
+	return fmt.Sprintf("Search %s: %s", searchScopeLabel(m.searchScope), query)
+}
+
+func searchScopeLabel(scope searchScope) string {
+	switch scope {
 	case searchScopeThemes:
-		label = "themes"
+		return "themes"
 	case searchScopeOutput:
-		label = "output"
+		return "output"
+	default:
+		return "repos"
 	}
-	return fmt.Sprintf("Search %s: %s", label, query)
 }
 
 func (m Model) titleWithSearch(title string, query string) string {
@@ -429,6 +433,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		switch msg.String() {
 		case "ctrl+c", "q":
 			return m, tea.Quit
+		case "esc":
+			m.searchScope = m.currentSearchScope()
+			if m.activeSearchQuery() != "" {
+				m.setActiveSearchQuery("")
+				m.status = fmt.Sprintf("Cleared %s search", searchScopeLabel(m.searchScope))
+			}
 		case "0":
 			m.setFocus(focusRepos)
 		case "1":
@@ -857,10 +867,14 @@ func (m Model) buildReposContent(width int, rows int) string {
 	updatedW := 5
 	syncW := 7
 	ageW := 5
-	authorW := 14
-	const minOpW = 9
-	const baseWidthWithoutNameOrOp = 62
-	nameW := max(6, min(22, contentW-baseWidthWithoutNameOrOp-minOpW))
+	authorW := 16
+	const minOpW = 12
+	const baseWidthWithoutNameOrOp = 67
+	maxNameW := 22
+	if !m.settings.ShowRepoInfo {
+		maxNameW = 28
+	}
+	nameW := max(6, min(maxNameW, contentW-baseWidthWithoutNameOrOp-minOpW))
 	opW := max(minOpW, contentW-baseWidthWithoutNameOrOp-nameW)
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
