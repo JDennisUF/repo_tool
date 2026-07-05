@@ -325,6 +325,24 @@
       "input": "#1D4ED8",
       "rowFocusBg": "#DBEAFE"
     },
+    "Terminal Phosphor": {
+      "background": "#0A0F0A",
+      "foreground": "#9AF5A3",
+      "muted": "#5EA66A",
+      "border": "#2F6B39",
+      "borderFocus": "#C9FFD0",
+      "header": "#C9FFD0",
+      "accent": "#7DFF8A",
+      "selection": "#D7FFD9",
+      "success": "#A6FFAF",
+      "error": "#7DFF8A",
+      "warning": "#C2FF7A",
+      "status": "#101710",
+      "statusText": "#9AF5A3",
+      "cursor": "#D7FFD9",
+      "input": "#C9FFD0",
+      "rowFocusBg": "#18301C"
+    },
     "Green Terminal": {
       "background": "#071407",
       "foreground": "#6BFF6B",
