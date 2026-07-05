@@ -102,6 +102,31 @@ func PullCommand(path string) string {
 	return fmt.Sprintf("git -C %s pull --ff-only", strconv.Quote(path))
 }
 
+func Fetch(path string) (string, error) {
+	cmd := exec.Command("git", "-C", path, "fetch", "--all", "--prune")
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	errOut := strings.TrimSpace(stderr.String())
+	combined := strings.TrimSpace(strings.Join([]string{out, errOut}, "\n"))
+	if combined == "" {
+		combined = "no output"
+	}
+
+	if err != nil {
+		return combined, fmt.Errorf("fetch failed: %w", err)
+	}
+	return combined, nil
+}
+
+func FetchCommand(path string) string {
+	return fmt.Sprintf("git -C %s fetch --all --prune", strconv.Quote(path))
+}
+
 func InspectStatus(path string) RepoStatus {
 	return InspectRepoMetadata(path).Status
 }

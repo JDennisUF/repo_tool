@@ -118,6 +118,13 @@ func TestPullCommand(t *testing.T) {
 	}
 }
 
+func TestFetchCommand(t *testing.T) {
+	repo := "/tmp/repo with spaces"
+	if got, want := FetchCommand(repo), `git -C "/tmp/repo with spaces" fetch --all --prune`; got != want {
+		t.Fatalf("fetch command = %q, want %q", got, want)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

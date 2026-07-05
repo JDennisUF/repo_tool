@@ -58,6 +58,10 @@ type pullFinishedMsg struct {
 	results []pullResult
 }
 
+type fetchFinishedMsg struct {
+	results []pullResult
+}
+
 type lazygitExitedMsg struct {
 	err  error
 	path string
@@ -340,6 +344,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scrollToBottom(m.outPanelHeight())
 		return m, nil
 
+	case fetchFinishedMsg:
+		m.busy = false
+		successes := 0
+		failures := 0
+		for i := range m.repos {
+			for _, r := range msg.results {
+				if m.repos[i].Path != r.path {
+					continue
+				}
+				if r.err != nil {
+					failures++
+					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
+				} else {
+					successes++
+					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
+				}
+			}
+		}
+		m.refreshRepoStatuses()
+		summary := fmt.Sprintf("Fetch complete: %d ok, %d failed", successes, failures)
+		m.status = summary
+		m.logInfo("--- " + summary + " ---")
+		m.scrollToBottom(m.outPanelHeight())
+		return m, nil
+
 	case lazygitExitedMsg:
 		if msg.path != "" {
 			m.refreshRepoStatus(msg.path)
@@ -479,6 +508,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo("Deselected all repositories")
 		case "?":
 			m.showHelp = !m.showHelp
+		case "h":
+			if m.busy {
+				m.status = "Busy running fetch"
+				return m, nil
+			}
+			targets := selectedRepos(m.repos)
+			scope := "selected repositories"
+			if len(targets) == 0 {
+				idx, ok := m.currentRepoIndex()
+				if !ok {
+					m.status = "No repository highlighted"
+					m.logInfo("Fetch: no repository highlighted")
+					return m, nil
+				}
+				targets = []store.Repo{m.repos[idx]}
+				scope = "highlighted repository"
+			}
+			m.busy = true
+			m.status = fmt.Sprintf("Fetching %d repositories...", len(targets))
+			m.logFetchStart(scope, targets)
+			m.scrollToBottom(m.outPanelHeight())
+			return m, fetchSelectedCmd(targets)
 		case "T":
 			m.openThemeSelector()
 		case "l":
@@ -1023,7 +1074,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -1087,9 +1138,9 @@ func (m Model) View() string {
 		Background(lipgloss.Color(m.theme.Status)).
 		Width(max(1, m.width)).
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
-	keys := m.fgStyle(m.theme.Muted).
+		keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1355,6 +1406,7 @@ func (m Model) helpView() string {
 		"  x               Delete list",
 		"",
 		"Refresh",
+		"  h               Fetch",
 		"  r               Refresh repo",
 		"  R               Refresh all",
 		"",
@@ -2160,6 +2212,16 @@ func (m *Model) logPullStart(scope string, repos []store.Repo) {
 	}
 }
 
+func (m *Model) logFetchStart(scope string, repos []store.Repo) {
+	m.logInfo(fmt.Sprintf("--- Fetch started: %s (%d repos) ---", scope, len(repos)))
+	for _, r := range repos {
+		m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
+		if m.settings.ShowGitCommands {
+			m.logInfo("  $ " + gitutil.FetchCommand(r.Path))
+		}
+	}
+}
+
 func pullSelectedCmd(repos []store.Repo) tea.Cmd {
 	return func() tea.Msg {
 		const maxWorkers = 4
@@ -2185,6 +2247,34 @@ func pullSelectedCmd(repos []store.Repo) tea.Cmd {
 
 		wg.Wait()
 		return pullFinishedMsg{results: results}
+	}
+}
+
+func fetchSelectedCmd(repos []store.Repo) tea.Cmd {
+	return func() tea.Msg {
+		const maxWorkers = 4
+		sem := make(chan struct{}, maxWorkers)
+		results := make([]pullResult, len(repos))
+		var wg sync.WaitGroup
+
+		for i := range repos {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				out, err := gitutil.Fetch(repos[i].Path)
+				results[i] = pullResult{
+					path:   repos[i].Path,
+					output: out,
+					err:    err,
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		return fetchFinishedMsg{results: results}
 	}
 }
 
