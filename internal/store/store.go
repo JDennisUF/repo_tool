@@ -25,6 +25,11 @@ type State struct {
 	Repos              []Repo              `json:"repos"`
 	FavoriteLists      map[string][]string `json:"favoriteLists,omitempty"`
 	ActiveFavoriteList string              `json:"activeFavoriteList,omitempty"`
+	Settings           Settings            `json:"settings,omitempty"`
+}
+
+type Settings struct {
+	ShowGitCommands bool `json:"showGitCommands,omitempty"`
 }
 
 type Store struct {

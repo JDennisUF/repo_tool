@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"sort"
+	"strconv"
 	"strings"
 )
 
@@ -95,6 +96,10 @@ func Pull(path string) (string, error) {
 		return combined, fmt.Errorf("pull failed: %w", err)
 	}
 	return combined, nil
+}
+
+func PullCommand(path string) string {
+	return fmt.Sprintf("git -C %s pull --ff-only", strconv.Quote(path))
 }
 
 func InspectStatus(path string) RepoStatus {

@@ -41,6 +41,9 @@ func TestLoadMigratesLegacyRepoState(t *testing.T) {
 	if _, ok := state.FavoriteLists[defaultFavoriteListName]; !ok {
 		t.Fatalf("default favorites list missing: %+v", state.FavoriteLists)
 	}
+	if state.Settings.ShowGitCommands {
+		t.Fatal("show git commands should default to false")
+	}
 }
 
 func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
@@ -59,6 +62,9 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 			"personal": {"/tmp/other"},
 		},
 		ActiveFavoriteList: "work",
+		Settings: Settings{
+			ShowGitCommands: true,
+		},
 	}
 	if err := s.Save(in); err != nil {
 		t.Fatalf("save state: %v", err)
@@ -80,5 +86,8 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	}
 	if out.Repos[0].LastUpdated != "2026-07-02T10:11:12Z" {
 		t.Fatalf("last updated = %q, want %q", out.Repos[0].LastUpdated, "2026-07-02T10:11:12Z")
+	}
+	if !out.Settings.ShowGitCommands {
+		t.Fatal("show git commands should persist")
 	}
 }

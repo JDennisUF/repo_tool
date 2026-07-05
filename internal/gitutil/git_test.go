@@ -111,6 +111,13 @@ func TestInspectRepoMetadataUpstreamDivergence(t *testing.T) {
 	}
 }
 
+func TestPullCommand(t *testing.T) {
+	repo := "/tmp/repo with spaces"
+	if got, want := PullCommand(repo), `git -C "/tmp/repo with spaces" pull --ff-only`; got != want {
+		t.Fatalf("pull command = %q, want %q", got, want)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

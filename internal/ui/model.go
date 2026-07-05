@@ -79,6 +79,8 @@ type Model struct {
 	busy       bool
 	showHelp   bool
 	focus      focusSection
+	settingsDialog bool
+	settingsCursor int
 
 	// output panel
 	output    []outputLine
@@ -102,6 +104,7 @@ type Model struct {
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
 	repoMeta            map[string]gitutil.RepoMetadata
+	settings            store.Settings
 }
 
 type favoritesDialogMode int
@@ -142,6 +145,7 @@ func NewModel() Model {
 	m.repos = state.Repos
 	m.favoriteLists = favoriteListsFromState(state.FavoriteLists)
 	m.activeFavoriteList = state.ActiveFavoriteList
+	m.settings = state.Settings
 	if m.activeFavoriteList == "" {
 		m.activeFavoriteList = defaultFavoriteListName
 	}
@@ -281,6 +285,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.favoritesDialog {
 			return m.handleFavoritesDialog(msg)
 		}
+		if m.settingsDialog {
+			return m.handleSettingsDialog(msg)
+		}
 		if m.inputMode != inputNone {
 			return m.handleInputMode(msg)
 		}
@@ -384,6 +391,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openThemeSelector()
 		case "l":
 			m.openFavoritesDialog()
+		case "S":
+			m.openSettingsDialog()
 		case "o":
 			m.inputMode = inputAddOne
 			m.textInput.SetValue("")
@@ -409,10 +418,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.busy = true
 			m.status = fmt.Sprintf("Pulling %d repositories...", len(selected))
-			m.logInfo(fmt.Sprintf("--- Pull started: %d repos ---", len(selected)))
-			for _, r := range selected {
-				m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
-			}
+			m.logPullStart("selected repositories", selected)
 			m.scrollToBottom(m.outPanelHeight())
 			return m, pullSelectedCmd(selected)
 		case "x":
@@ -848,6 +854,9 @@ func (m Model) View() string {
 	if m.favoritesDialog {
 		body = m.renderFavoritesDialog(body)
 	}
+	if m.settingsDialog {
+		body = m.renderSettingsDialog(body)
+	}
 
 	// ---------- status bar ----------
 	busy := "idle"
@@ -861,7 +870,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  r/R refresh  l lists  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1005,6 +1014,53 @@ func (m Model) renderFavoritesDialog(base string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) renderSettingsDialog(base string) string {
+	_ = base
+	screenW := max(1, m.width)
+	screenH := max(1, m.height-2)
+	dialogW := min(max(38, screenW-8), 72)
+	dialogH := min(max(10, screenH-6), 16)
+	dialog := m.renderSection(6, "Settings", m.settingsDialogView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
+
+	top := max(0, (screenH-dialogH)/2)
+	left := max(0, (screenW-dialogW)/2)
+	dialogLines := strings.Split(dialog, "\n")
+	bg := m.bgStyle()
+	lines := make([]string, screenH)
+	for i := range lines {
+		if i < top || i >= top+len(dialogLines) {
+			lines[i] = bg.Render(strings.Repeat(" ", screenW))
+			continue
+		}
+		dialogLine := dialogLines[i-top]
+		right := max(0, screenW-left-lipgloss.Width(dialogLine))
+		lines[i] = bg.Render(strings.Repeat(" ", left)) + dialogLine + bg.Render(strings.Repeat(" ", right))
+	}
+	return strings.Join(lines, "\n")
+}
+
+func (m Model) settingsDialogView(width int, rows int) string {
+	lines := []string{
+		m.fgStyle(m.theme.Muted).Render(trimRight("Enter/Space=toggle  Esc=close", width)),
+		"",
+	}
+
+	label := "Show git command lines in output"
+	value := "[ ]"
+	style := m.fgStyle(m.theme.Foreground)
+	if m.settings.ShowGitCommands {
+		value = "[x]"
+	}
+	if m.settingsCursor == 0 {
+		style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+	}
+	lines = append(lines, style.Render(trimRight("> "+value+" "+label, width)))
+	lines = append(lines, "")
+	lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight("More settings can be added here later.", width)))
+
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
 func (m Model) favoritesDialogView(width int, rows int) string {
 	lists := m.favoriteListNames()
 	lines := []string{
@@ -1088,6 +1144,7 @@ func (m Model) helpView() string {
 		"  1               Focus repo info",
 		"  2               Focus command output",
 		"  Left / Right    Cycle through panels",
+		"  S               Open settings",
 		"  T               Open theme selector",
 		"  ?               Toggle this help screen",
 		"  q / Ctrl+C      Quit",
@@ -1136,6 +1193,33 @@ func (m *Model) openThemeSelector() {
 		}
 	}
 	m.status = "Theme selector: preview with j/k, Enter selects, Esc cancels"
+}
+
+func (m *Model) openSettingsDialog() {
+	m.settingsDialog = true
+	m.settingsCursor = 0
+	m.status = "Settings: Enter or Space toggles, Esc closes"
+}
+
+func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "q", "S":
+		m.settingsDialog = false
+		m.status = "Closed settings"
+	case "up", "k", "down", "j":
+		m.settingsCursor = 0
+	case " ", "enter":
+		m.settings.ShowGitCommands = !m.settings.ShowGitCommands
+		m.persist()
+		if m.settings.ShowGitCommands {
+			m.status = "Enabled: show git command lines in output"
+		} else {
+			m.status = "Disabled: show git command lines in output"
+		}
+	}
+	return m, nil
 }
 
 func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1446,7 +1530,7 @@ func (m *Model) openFavoritesDialog() {
 			break
 		}
 	}
-	m.status = "Favorites lists: Enter selects, n creates, x deletes, Esc closes"
+	m.status = "Favorites lists: Enter selects, n creates, p pulls, x deletes, Esc closes"
 }
 
 func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1526,10 +1610,7 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		}
 		m.busy = true
 		m.status = fmt.Sprintf("Pulling %d repositories from favorites list %s...", len(repos), name)
-		m.logInfo(fmt.Sprintf("--- Pull started: favorites list %s (%d repos) ---", name, len(repos)))
-		for _, r := range repos {
-			m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
-		}
+		m.logPullStart("favorites list "+name, repos)
 		m.scrollToBottom(m.outPanelHeight())
 		return m, pullSelectedCmd(repos)
 	case "x":
@@ -1703,6 +1784,7 @@ func (m *Model) persist() {
 		Repos:              m.repos,
 		FavoriteLists:      m.favoriteListsForStore(),
 		ActiveFavoriteList: m.activeFavoriteList,
+		Settings:           m.settings,
 	}
 	if err := m.store.Save(state); err != nil {
 		m.status = fmt.Sprintf("Save error: %v", err)
@@ -1717,6 +1799,16 @@ func selectedRepos(repos []store.Repo) []store.Repo {
 		}
 	}
 	return selected
+}
+
+func (m *Model) logPullStart(scope string, repos []store.Repo) {
+	m.logInfo(fmt.Sprintf("--- Pull started: %s (%d repos) ---", scope, len(repos)))
+	for _, r := range repos {
+		m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
+		if m.settings.ShowGitCommands {
+			m.logInfo("  $ " + gitutil.PullCommand(r.Path))
+		}
+	}
 }
 
 func pullSelectedCmd(repos []store.Repo) tea.Cmd {
