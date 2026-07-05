@@ -26,6 +26,7 @@ const (
 	inputNone inputMode = iota
 	inputAddOne
 	inputScan
+	inputSearch
 )
 
 const defaultFavoriteListName = "default"
@@ -38,6 +39,14 @@ const (
 )
 
 const focusSectionCount = int(focusOutput) + 1
+
+type searchScope int
+
+const (
+	searchScopeRepos searchScope = iota
+	searchScopeThemes
+	searchScopeOutput
+)
 
 type pullResult struct {
 	path   string
@@ -90,6 +99,11 @@ type Model struct {
 	store               *store.Store
 	textInput           textinput.Model
 	inputMode           inputMode
+	searchScope         searchScope
+	searchBackupQuery   string
+	repoSearchQuery     string
+	themeSearchQuery    string
+	outputSearchQuery   string
 	theme               themePalette
 	themeName           string
 	themes              map[string]themePalette
@@ -219,6 +233,75 @@ func (m *Model) cycleFocus(delta int) {
 	m.setFocus(focusSection(next))
 }
 
+func (m Model) currentSearchScope() searchScope {
+	if m.themeSelecting {
+		return searchScopeThemes
+	}
+	if m.focus == focusOutput || m.outputMaximized {
+		return searchScopeOutput
+	}
+	return searchScopeRepos
+}
+
+func (m Model) activeSearchQuery() string {
+	switch m.searchScope {
+	case searchScopeThemes:
+		return m.themeSearchQuery
+	case searchScopeOutput:
+		return m.outputSearchQuery
+	default:
+		return m.repoSearchQuery
+	}
+}
+
+func (m *Model) setActiveSearchQuery(value string) {
+	switch m.searchScope {
+	case searchScopeThemes:
+		m.themeSearchQuery = value
+		m.normalizeThemeCursor()
+	case searchScopeOutput:
+		m.outputSearchQuery = value
+	default:
+		m.repoSearchQuery = value
+		m.normalizeCursor()
+		m.ensureRepoCursorVisible(m.repoPanelContentRows())
+	}
+}
+
+func (m *Model) openSearchMode() {
+	m.searchScope = m.currentSearchScope()
+	m.searchBackupQuery = m.activeSearchQuery()
+	m.inputMode = inputSearch
+	m.textInput.SetValue(m.searchBackupQuery)
+	m.textInput.Focus()
+	m.status = m.searchStatus(m.textInput.Value())
+}
+
+func (m Model) searchStatus(query string) string {
+	label := "repos"
+	switch m.searchScope {
+	case searchScopeThemes:
+		label = "themes"
+	case searchScopeOutput:
+		label = "output"
+	}
+	return fmt.Sprintf("Search %s: %s", label, query)
+}
+
+func (m Model) titleWithSearch(title string, query string) string {
+	if query == "" {
+		return title
+	}
+	return fmt.Sprintf("%s /%s", title, query)
+}
+
+func containsFold(text string, query string) bool {
+	if query == "" {
+		return true
+	}
+	return strings.Contains(strings.ToLower(text), strings.ToLower(query))
+}
+
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	switch msg := msg.(type) {
 	case tea.WindowSizeMsg:
@@ -281,6 +364,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if m.inputMode == inputSearch {
+			return m.handleInputMode(msg)
+		}
 		if m.favoritesDialog {
 			return m.handleFavoritesDialog(msg)
 		}
@@ -289,6 +375,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.inputMode != inputNone {
 			return m.handleInputMode(msg)
+		}
+		if msg.String() == "/" {
+			m.openSearchMode()
+			return m, nil
 		}
 		if m.themeSelecting {
 			return m.handleThemeSelector(msg)
@@ -543,6 +633,81 @@ func (m Model) showRightColumn() bool {
 	return m.settings.ShowRepoInfo || m.themeSelecting
 }
 
+func (m Model) repoMatchesSearch(repo store.Repo) bool {
+	if m.repoSearchQuery == "" {
+		return true
+	}
+	meta := m.repoMetadata(repo.Path)
+	haystack := strings.Join([]string{
+		repo.Name,
+		repo.Path,
+		meta.CurrentBranch,
+		repo.LastOp,
+	}, " ")
+	return containsFold(haystack, m.repoSearchQuery)
+}
+
+func (m Model) visibleThemeNames() []string {
+	if m.themeSearchQuery == "" {
+		return m.themeNames
+	}
+	filtered := make([]string, 0, len(m.themeNames))
+	for _, name := range m.themeNames {
+		if containsFold(name, m.themeSearchQuery) {
+			filtered = append(filtered, name)
+		}
+	}
+	return filtered
+}
+
+func (m *Model) normalizeThemeCursor() {
+	visible := m.visibleThemeNames()
+	if len(visible) == 0 {
+		m.themeCursor = 0
+		return
+	}
+	if m.themeCursor < 0 {
+		m.themeCursor = 0
+	}
+	if m.themeCursor >= len(visible) {
+		m.themeCursor = len(visible) - 1
+	}
+	name := visible[m.themeCursor]
+	if palette, ok := m.themes[name]; ok {
+		m.theme = palette
+		m.themeName = name
+	}
+}
+
+func (m Model) highlightSearchMatches(text string, query string, baseStyle lipgloss.Style) string {
+	if query == "" {
+		return baseStyle.Render(text)
+	}
+	matchStyle := lipgloss.NewStyle().
+		Foreground(lipgloss.Color(m.theme.Background)).
+		Background(lipgloss.Color(m.theme.Accent)).
+		Bold(true)
+	lowerText := strings.ToLower(text)
+	lowerQuery := strings.ToLower(query)
+	var b strings.Builder
+	start := 0
+	for {
+		idx := strings.Index(lowerText[start:], lowerQuery)
+		if idx < 0 {
+			b.WriteString(baseStyle.Render(text[start:]))
+			break
+		}
+		idx += start
+		if idx > start {
+			b.WriteString(baseStyle.Render(text[start:idx]))
+		}
+		end := idx + len(query)
+		b.WriteString(matchStyle.Render(text[idx:end]))
+		start = end
+	}
+	return b.String()
+}
+
 func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style {
 	borderColor := m.theme.Border
 	if focused {
@@ -649,7 +814,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 	if len(m.repos) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add or s to scan)"))
 	} else if len(visible) == 0 {
-		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos in current favorites view)"))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no matching repos)"))
 	} else {
 		availableRows := rows - len(lines)
 		if m.inputMode != inputNone {
@@ -742,10 +907,12 @@ func (m Model) buildReposContent(width int, rows int) string {
 		}
 	}
 
-	if m.inputMode != inputNone {
+	if m.inputMode != inputNone && (m.inputMode != inputSearch || m.searchScope == searchScopeRepos) {
 		prompt := "Path"
 		if m.inputMode == inputScan {
 			prompt = "Scan root"
+		} else if m.inputMode == inputSearch {
+			prompt = "Search"
 		}
 		input := trimRight(prompt+": "+m.textInput.View(), width)
 		lines = append(lines, "", m.fgStyle(m.theme.Input).Render(input), m.fgStyle(m.theme.Muted).Render("Enter=confirm Esc=cancel"))
@@ -816,7 +983,7 @@ func (m Model) buildOutputContent(width int, rows int) string {
 			style = style.Foreground(lipgloss.Color(m.theme.Error))
 		}
 		line := trimRight(prefix+ol.ts+" "+ol.text, width)
-		lines = append(lines, style.Render(line))
+		lines = append(lines, m.highlightSearchMatches(line, m.outputSearchQuery, style))
 	}
 	if len(lines) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no command output yet)"))
@@ -833,7 +1000,7 @@ func (m Model) View() string {
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
 	if m.outputMaximized {
-		outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
+		outputPanel := m.renderSection(1, m.titleWithSearch("Command Output", m.outputSearchQuery), m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
 		body := outputPanel
 		if m.showHelp {
 			body = m.renderHelpOverlay(body)
@@ -856,7 +1023,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -866,7 +1033,7 @@ func (m Model) View() string {
 		outputH = max(5, bodyH-topH)
 	}
 
-	leftPanel := m.renderSection(0, "Repos", m.buildReposContent(max(1, lw-2), max(1, topH-2)), lw, topH, m.focus == focusRepos)
+	leftPanel := m.renderSection(0, m.titleWithSearch("Repos", m.repoSearchQuery), m.buildReposContent(max(1, lw-2), max(1, topH-2)), lw, topH, m.focus == focusRepos)
 
 	body := leftPanel
 	if rw > 0 {
@@ -886,18 +1053,18 @@ func (m Model) View() string {
 			} else {
 				rightPanel = m.renderThemeSelector(rw, bodyH)
 			}
-			leftBottom := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
+			leftBottom := m.renderSection(1, m.titleWithSearch("Command Output", m.outputSearchQuery), m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
 			leftColumn := lipgloss.JoinVertical(lipgloss.Left, leftPanel, leftBottom)
 			gutter := m.renderGutter(bodyH)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gutter, rightPanel)
 		} else {
 			gutter := m.renderGutter(topH)
 			topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
-			outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+			outputPanel := m.renderSection(1, m.titleWithSearch("Command Output", m.outputSearchQuery), m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 			body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 		}
 	} else if outputH > 0 {
-		outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+		outputPanel := m.renderSection(1, m.titleWithSearch("Command Output", m.outputSearchQuery), m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 		body = lipgloss.JoinVertical(lipgloss.Left, leftPanel, outputPanel)
 	}
 	if m.showHelp {
@@ -922,7 +1089,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1014,16 +1181,17 @@ func (m Model) padBackground(content string, width int, height int) string {
 func (m Model) renderThemeSelector(width int, height int) string {
 	rows := max(1, height-2)
 	lines := []string{}
-	if len(m.themeNames) == 0 {
-		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no themes available)"))
+	visible := m.visibleThemeNames()
+	if len(visible) == 0 {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no matching themes)"))
 	} else {
 		start := 0
 		if m.themeCursor >= rows {
 			start = m.themeCursor - rows + 1
 		}
-		end := min(start+rows, len(m.themeNames))
+		end := min(start+rows, len(visible))
 		for i := start; i < end; i++ {
-			name := m.themeNames[i]
+			name := visible[i]
 			marker := "  "
 			style := m.fgStyle(m.theme.Foreground)
 			if i == m.themeCursor {
@@ -1036,9 +1204,9 @@ func (m Model) renderThemeSelector(width int, height int) string {
 			lines = append(lines, style.Render(trimRight(marker+name, max(1, width-4))))
 		}
 	}
-	footer := m.fgStyle(m.theme.Muted).Render("j/k preview  Enter select  Esc cancel")
+	footer := m.fgStyle(m.theme.Muted).Render("j/k preview  / search  Enter select  Esc cancel")
 	body := strings.Join(append(lines, footer), "\n")
-	return m.renderSection(9, "Theme Selector", body, width, height, true)
+	return m.renderSection(9, m.titleWithSearch("Theme Selector", m.themeSearchQuery), body, width, height, true)
 }
 
 func (m Model) renderFavoritesDialog(base string) string {
@@ -1173,6 +1341,7 @@ func (m Model) helpView() string {
 		"  left/right      Cycle focus",
 		"  0               Focus repos",
 		"  1               Focus output",
+		"  /               Search",
 		"  Enter           Max output",
 		"  PgUp / PgDn     Page output",
 		"  space           Toggle select",
@@ -1204,6 +1373,7 @@ func (m Model) helpView() string {
 		"",
 		"UI",
 		"  +               Toggle repo info",
+		"  /               Search",
 		"  ,               Settings",
 		"  S               Settings",
 		"  T               Themes",
@@ -1217,6 +1387,11 @@ func (m Model) helpView() string {
 		"  ,               Cancel",
 		"  S               Cancel",
 		"  q               Cancel",
+		"  Esc             Cancel",
+		"",
+		"Search",
+		"  /               Open",
+		"  Enter           Apply",
 		"  Esc             Cancel",
 		"",
 		"Themes",
@@ -1282,7 +1457,7 @@ func (m *Model) openThemeSelector() {
 	m.savedTheme = m.theme
 	m.savedThemeName = m.themeName
 	m.themeCursor = 0
-	for i, name := range m.themeNames {
+	for i, name := range m.visibleThemeNames() {
 		if name == m.themeName {
 			m.themeCursor = i
 			break
@@ -1365,6 +1540,17 @@ func (m *Model) toggleOutputMaximized() {
 	m.status = "Normal command output"
 }
 
+func (m *Model) closeSearchMode(cancel bool) {
+	if cancel {
+		m.setActiveSearchQuery(m.searchBackupQuery)
+		m.status = "Canceled search"
+	} else {
+		m.status = m.searchStatus(m.activeSearchQuery())
+	}
+	m.inputMode = inputNone
+	m.textInput.Blur()
+}
+
 func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
@@ -1394,11 +1580,12 @@ func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m *Model) moveThemeCursor(delta int) {
-	if len(m.themeNames) == 0 {
+	visible := m.visibleThemeNames()
+	if len(visible) == 0 {
 		return
 	}
-	m.themeCursor = (m.themeCursor + delta + len(m.themeNames)) % len(m.themeNames)
-	name := m.themeNames[m.themeCursor]
+	m.themeCursor = (m.themeCursor + delta + len(visible)) % len(visible)
+	name := visible[m.themeCursor]
 	if palette, ok := m.themes[name]; ok {
 		m.theme = palette
 		m.themeName = name
@@ -1507,6 +1694,9 @@ func (m Model) visibleRepoIndexes() []int {
 	indexes := make([]int, 0, len(m.repos))
 	for i, repo := range m.repos {
 		if m.favoritesOnly && !m.isFavorite(repo.Path) {
+			continue
+		}
+		if !m.repoMatchesSearch(repo) {
 			continue
 		}
 		indexes = append(indexes, i)
@@ -1815,6 +2005,22 @@ func (m Model) favoriteRepos(listName string) []store.Repo {
 }
 
 func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.inputMode == inputSearch {
+		switch msg.String() {
+		case "esc":
+			m.closeSearchMode(true)
+			return m, nil
+		case "enter":
+			m.closeSearchMode(false)
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		m.setActiveSearchQuery(strings.TrimSpace(m.textInput.Value()))
+		m.status = m.searchStatus(m.textInput.Value())
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "esc":
 		m.inputMode = inputNone
