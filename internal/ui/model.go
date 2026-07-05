@@ -210,7 +210,7 @@ func (m *Model) setFocus(focus focusSection) {
 	case focusRepos:
 		m.status = "Focused [0] Repos"
 	case focusOutput:
-		m.status = "Focused [2] Command Output"
+		m.status = "Focused [1] Command Output"
 	}
 }
 
@@ -309,7 +309,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "0":
 			m.setFocus(focusRepos)
-		case "2":
+		case "1":
 			m.setFocus(focusOutput)
 		case "left":
 			m.cycleFocus(-1)
@@ -832,7 +832,7 @@ func (m Model) View() string {
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
 	if m.outputMaximized {
-		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
+		outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
 		body := outputPanel
 		if m.showHelp {
 			body = m.renderHelpOverlay(body)
@@ -855,7 +855,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[2] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -871,7 +871,7 @@ func (m Model) View() string {
 	if rw > 0 {
 		rightPanel := ""
 		if m.settings.ShowRepoInfo {
-			rightPanel = m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, false)
+			rightPanel = m.renderSection(-1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, false)
 		}
 		if m.themeSelecting && outputH > 0 {
 			if m.settings.ShowRepoInfo {
@@ -879,24 +879,24 @@ func (m Model) View() string {
 				infoLines := len(strings.Split(infoBody, "\n"))
 				infoH := min(max(8, infoLines+2), max(8, bodyH/2))
 				themeH := max(5, bodyH-infoH)
-				infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, false)
+				infoPanel := m.renderSection(-1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, false)
 				themePanel := m.renderThemeSelector(rw, themeH)
 				rightPanel = lipgloss.JoinVertical(lipgloss.Left, infoPanel, themePanel)
 			} else {
 				rightPanel = m.renderThemeSelector(rw, bodyH)
 			}
-			leftBottom := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
+			leftBottom := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
 			leftColumn := lipgloss.JoinVertical(lipgloss.Left, leftPanel, leftBottom)
 			gutter := m.renderGutter(bodyH)
 			body = lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gutter, rightPanel)
 		} else {
 			gutter := m.renderGutter(topH)
 			topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
-			outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+			outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 			body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 		}
 	} else if outputH > 0 {
-		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+		outputPanel := m.renderSection(1, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 		body = lipgloss.JoinVertical(lipgloss.Left, leftPanel, outputPanel)
 	}
 	if m.showHelp {
@@ -921,7 +921,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[2] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1171,7 +1171,7 @@ func (m Model) helpView() string {
 		"  up/down         Move / scroll output",
 		"  left/right      Cycle focus",
 		"  0               Focus repos",
-		"  2               Focus output",
+		"  1               Focus output",
 		"  Enter           Max output",
 		"  PgUp / PgDn     Page output",
 		"  space           Toggle select",
