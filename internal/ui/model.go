@@ -372,11 +372,12 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.status = fmt.Sprintf("Refreshed statuses for %d repositories", len(m.repos))
 			m.logInfo(fmt.Sprintf("refresh all: %d repositories", len(m.repos)))
 		case "a":
-			for i := range m.repos {
+			visible := m.visibleRepoIndexes()
+			for _, i := range visible {
 				m.repos[i].Selected = true
 			}
 			m.persist()
-			msg := fmt.Sprintf("Selected all %d repositories", len(m.repos))
+			msg := fmt.Sprintf("Selected %d visible repositories", len(visible))
 			m.status = msg
 			m.logInfo(msg)
 		case "A":
