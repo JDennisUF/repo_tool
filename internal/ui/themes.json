@@ -307,6 +307,24 @@
       "input": "#8250DF",
       "rowFocusBg": "#DDF4FF"
     },
+    "Stars and Stripes": {
+      "background": "#FFFDF8",
+      "foreground": "#14213D",
+      "muted": "#6B7280",
+      "border": "#B91C1C",
+      "borderFocus": "#1D4ED8",
+      "header": "#B91C1C",
+      "accent": "#1D4ED8",
+      "selection": "#DC2626",
+      "success": "#2563EB",
+      "error": "#B91C1C",
+      "warning": "#9A3412",
+      "status": "#E5E7EB",
+      "statusText": "#14213D",
+      "cursor": "#1D4ED8",
+      "input": "#1D4ED8",
+      "rowFocusBg": "#DBEAFE"
+    },
     "Green Terminal": {
       "background": "#071407",
       "foreground": "#6BFF6B",
