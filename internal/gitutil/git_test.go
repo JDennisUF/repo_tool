@@ -71,6 +71,12 @@ func TestInspectRepoMetadataBranches(t *testing.T) {
 	if !containsString(meta.LocalBranches, "bugfix/test") || !containsString(meta.LocalBranches, "feature/test") {
 		t.Fatalf("local branches = %v, want bugfix/test and feature/test", meta.LocalBranches)
 	}
+	if meta.LastCommitAuthor != "Test" {
+		t.Fatalf("last commit author = %q, want %q", meta.LastCommitAuthor, "Test")
+	}
+	if meta.LastCommitAt.IsZero() {
+		t.Fatal("expected last commit time to be populated")
+	}
 }
 
 func TestInspectRepoMetadataUpstreamDivergence(t *testing.T) {

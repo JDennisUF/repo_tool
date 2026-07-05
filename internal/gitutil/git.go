@@ -8,17 +8,20 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 )
 
 type RepoStatus int
 
 type RepoMetadata struct {
-	Status        RepoStatus
-	CurrentBranch string
-	LocalBranches []string
-	AheadCount    int
-	BehindCount   int
-	HasUpstream   bool
+	Status           RepoStatus
+	CurrentBranch    string
+	LocalBranches    []string
+	AheadCount       int
+	BehindCount      int
+	HasUpstream      bool
+	LastCommitAuthor string
+	LastCommitAt     time.Time
 }
 
 const (
@@ -152,6 +155,7 @@ func InspectRepoMetadata(path string) RepoMetadata {
 		LocalBranches: localBranches(path),
 	}
 	meta.AheadCount, meta.BehindCount, meta.HasUpstream = upstreamDivergence(path)
+	meta.LastCommitAuthor, meta.LastCommitAt = lastCommitInfo(path)
 	return meta
 }
 
@@ -221,4 +225,25 @@ func upstreamDivergence(path string) (ahead int, behind int, hasUpstream bool) {
 	}
 
 	return ahead, behind, true
+}
+
+func lastCommitInfo(path string) (author string, committedAt time.Time) {
+	cmd := exec.Command("git", "-C", path, "log", "-1", "--format=%ct%x09%an")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return "", time.Time{}
+	}
+
+	fields := strings.SplitN(strings.TrimSpace(stdout.String()), "\t", 2)
+	if len(fields) != 2 {
+		return "", time.Time{}
+	}
+
+	unixSeconds, err := strconv.ParseInt(strings.TrimSpace(fields[0]), 10, 64)
+	if err != nil {
+		return "", time.Time{}
+	}
+
+	return strings.TrimSpace(fields[1]), time.Unix(unixSeconds, 0)
 }

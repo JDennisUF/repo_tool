@@ -852,15 +852,21 @@ func (m Model) repoMetadata(path string) gitutil.RepoMetadata {
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
-	branchW := 12
+	contentW := max(1, width-1)
+	branchW := 10
 	updatedW := 5
 	syncW := 7
-	nameW := max(6, min(28, width-(3+1+3+1+6+1+syncW+1+updatedW+1+branchW+1)))
+	ageW := 5
+	authorW := 14
+	const minOpW = 9
+	const baseWidthWithoutNameOrOp = 62
+	nameW := max(6, min(22, contentW-baseWidthWithoutNameOrOp-minOpW))
+	opW := max(minOpW, contentW-baseWidthWithoutNameOrOp-nameW)
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(
-			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW),
-			width,
+			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW)+" "+padCell("Age", ageW)+" "+padCell("Author", authorW)+" "+padCell("Op", opW),
+			contentW,
 		)),
 	}
 
@@ -928,17 +934,21 @@ func (m Model) buildReposContent(width int, rows int) string {
 			if focused {
 				branchStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 			}
-
-			last := ""
+			authorStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
+			if focused {
+				authorStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
+			}
+			opStyle := m.fgBgStyle(m.theme.Muted, rowBg)
+			op := "-"
 			if repo.LastOp != "" {
-				lastStyle := m.fgBgStyle(m.theme.Warning, rowBg)
+				op = repo.LastOp
+				opStyle = m.fgBgStyle(m.theme.Warning, rowBg)
 				if strings.Contains(repo.LastOp, "ok") {
-					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Success))
+					opStyle = opStyle.Foreground(lipgloss.Color(m.theme.Success))
 				}
 				if strings.Contains(repo.LastOp, "failed") {
-					lastStyle = lastStyle.Foreground(lipgloss.Color(m.theme.Error))
+					opStyle = opStyle.Foreground(lipgloss.Color(m.theme.Error))
 				}
-				last = sep + lastStyle.Render("["+trimRight(repo.LastOp, 12)+"]")
 			}
 
 			name := trimRight(repo.Name, nameW)
@@ -947,6 +957,11 @@ func (m Model) buildReposContent(width int, rows int) string {
 				branch = "-"
 			}
 			updated := formatLastUpdatedShort(repo.LastUpdated)
+			commitAge := formatCommitAgeShort(meta.LastCommitAt)
+			commitAuthor := trimRight(meta.LastCommitAuthor, authorW)
+			if commitAuthor == "" {
+				commitAuthor = "-"
+			}
 			row := strings.Join([]string{
 				selStyle.Render(padCell(sel, 3)),
 				favStyle.Render(padCell(fav, 3)),
@@ -955,8 +970,10 @@ func (m Model) buildReposContent(width int, rows int) string {
 				m.renderSyncCell(meta, rowBg, syncW),
 				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(updated, updatedW)),
 				branchStyle.Render(padCell(branch, branchW)),
+				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(commitAge, ageW)),
+				authorStyle.Render(padCell(commitAuthor, authorW)),
+				opStyle.Render(padCell(trimRight(op, opW), opW)),
 			}, sep)
-			row += last
 			lines = append(lines, row)
 		}
 	}
@@ -968,8 +985,8 @@ func (m Model) buildReposContent(width int, rows int) string {
 		} else if m.inputMode == inputSearch {
 			prompt = "Search"
 		}
-		input := trimRight(prompt+": "+m.textInput.View(), width)
-		lines = append(lines, "", m.fgStyle(m.theme.Input).Render(input), m.fgStyle(m.theme.Muted).Render("Enter=confirm Esc=cancel"))
+		input := trimRight(prompt+": "+m.textInput.View(), contentW)
+		lines = append(lines, "", m.fgStyle(m.theme.Input).Render(input), m.fgStyle(m.theme.Muted).Render(trimRight("Enter=confirm Esc=cancel", contentW)))
 	}
 
 	return strings.Join(limitLines(lines, rows), "\n")
@@ -1002,6 +1019,8 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 		m.labelValue("Path", r.Path, width),
 		m.labelValue("Branch", currentBranch, width),
 		m.labelValue("Status", status.Description(), width),
+		m.labelValue("Commit Age", formatCommitAge(meta.LastCommitAt), width),
+		m.labelValue("Commit By", fallbackValue(meta.LastCommitAuthor, "none"), width),
 		m.labelValue("Updated", lastUpdated, width),
 		m.labelValue("Last", lastOp, width),
 		m.labelValue("Favorite", favorite, width),
@@ -2489,6 +2508,24 @@ func formatLastUpdatedShort(value string) string {
 	if err != nil {
 		return "-"
 	}
+	return formatRelativeAgeShort(ts)
+}
+
+func formatCommitAge(value time.Time) string {
+	if value.IsZero() {
+		return "none"
+	}
+	return formatRelativeAgeLong(value)
+}
+
+func formatCommitAgeShort(value time.Time) string {
+	if value.IsZero() {
+		return "-"
+	}
+	return formatRelativeAgeShort(value)
+}
+
+func formatRelativeAgeShort(ts time.Time) string {
 	d := time.Since(ts)
 	if d < 0 {
 		d = 0
@@ -2506,6 +2543,39 @@ func formatLastUpdatedShort(value string) string {
 	}
 	days := int(d / (24 * time.Hour))
 	return fmt.Sprintf("%dd", days)
+}
+
+func formatRelativeAgeLong(ts time.Time) string {
+	d := time.Since(ts)
+	if d < 0 {
+		d = 0
+	}
+	if d < time.Hour {
+		minutes := int(d / time.Minute)
+		if minutes < 1 {
+			minutes = 1
+		}
+		return fmt.Sprintf("%d minutes ago", minutes)
+	}
+	if d < 24*time.Hour {
+		hours := int(d / time.Hour)
+		if hours == 1 {
+			return "1 hour ago"
+		}
+		return fmt.Sprintf("%d hours ago", hours)
+	}
+	days := int(d / (24 * time.Hour))
+	if days == 1 {
+		return "1 day ago"
+	}
+	return fmt.Sprintf("%d days ago", days)
+}
+
+func fallbackValue(value string, fallback string) string {
+	if strings.TrimSpace(value) == "" {
+		return fallback
+	}
+	return value
 }
 
 func formatSyncCounts(meta gitutil.RepoMetadata) string {
