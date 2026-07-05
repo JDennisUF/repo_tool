@@ -39,7 +39,7 @@ go build -o rt ./cmd/rt
 - `A`: deselect all repos
 - `o`: add one repo by path (supports drag-and-drop path paste)
 - `s`: scan/search a root directory for repos
-- `p`: pull selected repos
+- `p`: pull selected repos, or the highlighted repo if none are selected
 - `h`: fetch selected repos, or the highlighted repo if none are selected
 - `z`: launch lazygit on highlighted repo
 - `v`: launch VS Code on highlighted repo

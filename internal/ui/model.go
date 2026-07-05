@@ -569,14 +569,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			selected := selectedRepos(m.repos)
+			scope := "selected repositories"
 			if len(selected) == 0 {
-				m.status = "No repositories selected"
-				m.logInfo("Pull: no repositories selected")
-				return m, nil
+				idx, ok := m.currentRepoIndex()
+				if !ok {
+					m.status = "No repository highlighted"
+					m.logInfo("Pull: no repository highlighted")
+					return m, nil
+				}
+				selected = []store.Repo{m.repos[idx]}
+				scope = "highlighted repository"
 			}
 			m.busy = true
 			m.status = fmt.Sprintf("Pulling %d repositories...", len(selected))
-			m.logPullStart("selected repositories", selected)
+			m.logPullStart(scope, selected)
 			m.scrollToBottom(m.outPanelHeight())
 			return m, pullSelectedCmd(selected)
 		case "x":
@@ -1453,7 +1459,7 @@ func (m Model) helpView(width int) string {
 		"  h               Fetch",
 		"  o               Add repo",
 		"  s               Scan repos",
-		"  p               Pull selected",
+		"  p               Pull selected or highlighted",
 		"  x               Remove repo",
 		"  z               Open lazygit",
 		"  v               Open VS Code",
