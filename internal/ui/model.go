@@ -393,6 +393,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case tea.KeyMsg:
+		if msg.String() == "q" {
+			return m, tea.Quit
+		}
 		if m.inputMode == inputSearch {
 			return m.handleInputMode(msg)
 		}
@@ -416,7 +419,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "ctrl+c":
 				return m, tea.Quit
-			case "?", "esc", "enter", "q":
+			case "?", "esc", "enter":
 				m.showHelp = false
 				return m, nil
 			}
@@ -1148,9 +1151,9 @@ func (m Model) renderHelpOverlay(base string) string {
 	_ = base
 	screenW := max(1, m.width)
 	screenH := max(1, m.height-2)
-	dialogW := min(max(32, screenW-8), 72)
-	dialogH := min(max(18, screenH-6), 27)
-	dialog := m.renderSection(8, "Help", m.helpView(), dialogW, dialogH, true)
+	dialogW := min(max(44, screenW-4), 96)
+	dialogH := min(max(28, screenH-2), 40)
+	dialog := m.renderSection(8, "Help", m.helpView(max(1, dialogW-4)), dialogW, dialogH, true)
 
 	top := max(0, (screenH-dialogH)/2)
 	left := max(0, (screenW-dialogW)/2)
@@ -1384,7 +1387,7 @@ func (m Model) favoritesDialogView(width int, rows int) string {
 	return strings.Join(limitLines(lines, rows), "\n")
 }
 
-func (m Model) helpView() string {
+func (m Model) helpView(width int) string {
 	raw := []string{
 		"Navigation",
 		"  j/k             Move / scroll output",
@@ -1393,8 +1396,8 @@ func (m Model) helpView() string {
 		"  0               Focus repos",
 		"  1               Focus output",
 		"  /               Search",
-		"  Enter           Max output",
-		"  PgUp / PgDn     Page output",
+		"  Enter           Maximize Command Output",
+		"  PgUp/PgDn       Page output",
 		"  space           Toggle select",
 		"",
 		"Favorites",
@@ -1426,8 +1429,7 @@ func (m Model) helpView() string {
 		"UI",
 		"  +               Toggle repo info",
 		"  /               Search",
-		"  ,               Settings",
-		"  S               Settings",
+		"  ,  S            Settings",
 		"  T               Themes",
 		"  ?               Help",
 		"  q               Quit",
@@ -1438,7 +1440,6 @@ func (m Model) helpView() string {
 		"  Enter           Save",
 		"  ,               Cancel",
 		"  S               Cancel",
-		"  q               Cancel",
 		"  Esc             Cancel",
 		"",
 		"Search",
@@ -1449,7 +1450,6 @@ func (m Model) helpView() string {
 		"Themes",
 		"  j/k             Preview",
 		"  Enter           Select",
-		"  q               Cancel",
 		"  Esc             Cancel",
 		"",
 		"Lists",
@@ -1459,35 +1459,98 @@ func (m Model) helpView() string {
 		"  p               Pull list",
 		"  x               Delete list",
 		"  l               Close",
-		"  q               Close",
 		"  Esc             Close",
 		"",
 		"Help",
 		"  ?               Close",
-		"  q               Close",
 		"  Enter           Close",
 		"  Esc             Close",
 		"",
 		"Quit",
 		"  Ctrl+C          Quit",
-		"  q               Quit main",
+		"  q               Quit",
 		"",
 		"Press Enter, Esc, or ? to close",
 	}
-	lines := make([]string, 0, len(raw))
+	sections := make([][]string, 0, 12)
+	current := make([]string, 0, 8)
 	for _, line := range raw {
-		switch {
-		case line == "":
-			lines = append(lines, "")
-		case !strings.HasPrefix(line, " "):
-			lines = append(lines, m.fgStyle(m.theme.Accent).Bold(true).Render(line))
-		case strings.HasPrefix(line, "Press "):
-			lines = append(lines, m.fgStyle(m.theme.Muted).Render(line))
-		default:
-			lines = append(lines, m.fgStyle(m.theme.Foreground).Render(line))
+		if line == "" {
+			if len(current) > 0 {
+				sections = append(sections, current)
+				current = nil
+			}
+			continue
+		}
+		current = append(current, line)
+	}
+	if len(current) > 0 {
+		sections = append(sections, current)
+	}
+
+	if width < 48 || len(sections) < 2 {
+		return strings.Join(m.renderHelpSections(sections), "\n")
+	}
+
+	leftWidth := max(18, (width-2)/2)
+	rightWidth := max(18, width-leftWidth-2)
+
+	leftSections := make([][]string, 0, len(sections))
+	rightSections := make([][]string, 0, len(sections))
+	leftLinesCount := 0
+	rightLinesCount := 0
+
+	for _, section := range sections {
+		sectionLines := len(section) + 1
+		if leftLinesCount <= rightLinesCount {
+			leftSections = append(leftSections, section)
+			leftLinesCount += sectionLines
+		} else {
+			rightSections = append(rightSections, section)
+			rightLinesCount += sectionLines
 		}
 	}
+
+	leftLines := m.renderHelpSections(leftSections)
+	rightLines := m.renderHelpSections(rightSections)
+	rows := max(len(leftLines), len(rightLines))
+	space := m.bgStyle().Render("  ")
+	blankLeft := m.bgStyle().Render(strings.Repeat(" ", leftWidth))
+	blankRight := m.bgStyle().Render(strings.Repeat(" ", rightWidth))
+	lines := make([]string, 0, rows)
+	for i := 0; i < rows; i++ {
+		left := blankLeft
+		right := blankRight
+		if i < len(leftLines) {
+			left = padStyledCell(styledTrimRight(leftLines[i], leftWidth), leftWidth, m.theme.Background)
+		}
+		if i < len(rightLines) {
+			right = padStyledCell(styledTrimRight(rightLines[i], rightWidth), rightWidth, m.theme.Background)
+		}
+		lines = append(lines, left+space+right)
+	}
+
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) renderHelpSections(sections [][]string) []string {
+	lines := make([]string, 0, len(sections)*6)
+	for sectionIndex, section := range sections {
+		if sectionIndex > 0 {
+			lines = append(lines, "")
+		}
+		for _, line := range section {
+			switch {
+			case !strings.HasPrefix(line, " "):
+				lines = append(lines, m.fgStyle(m.theme.Accent).Bold(true).Render(line))
+			case strings.HasPrefix(line, "Press "):
+				lines = append(lines, m.fgStyle(m.theme.Muted).Render(line))
+			default:
+				lines = append(lines, m.fgStyle(m.theme.Foreground).Render(line))
+			}
+		}
+	}
+	return lines
 }
 
 func (m Model) labelValue(label string, value string, width int) string {
@@ -1529,7 +1592,7 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q", "S", ",":
+	case "esc", "S", ",":
 		m.settingsDialog = false
 		m.settingsDraft = m.settings
 		m.status = "Canceled settings"
@@ -1607,7 +1670,7 @@ func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q":
+	case "esc":
 		m.theme = m.savedTheme
 		m.themeName = m.savedThemeName
 		m.themeSelecting = false
@@ -1957,7 +2020,7 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q", "l":
+	case "esc", "l":
 		m.favoritesDialog = false
 		m.status = "Closed favorites lists"
 	case "up", "k":

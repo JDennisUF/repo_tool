@@ -53,11 +53,11 @@ go build -o rt ./cmd/rt
 - `0`: focus repositories
 - `1`: focus command output
 - `j`/`k`: scroll command output when output is focused
-- `Enter`: toggle command output maximized/normal from repos or output focus
+- `Enter`: maximize command output from repos or output focus; press again to restore
 - `T`: open the theme selector; `j`/`k` previews, `Enter` selects, `Esc` cancels
 - `?`: show/hide help dialog
 - `Enter` or `Esc`: close help dialog
-- `q` or `Ctrl+C`: quit
+- `q` or `Ctrl+C`: quit from anywhere
 
 ## Themes
 
