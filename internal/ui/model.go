@@ -1409,7 +1409,6 @@ func (m Model) helpView(width int) string {
 		"  x               Delete list",
 		"",
 		"Refresh",
-		"  h               Fetch",
 		"  r               Refresh repo",
 		"  R               Refresh all",
 		"",
@@ -1418,6 +1417,7 @@ func (m Model) helpView(width int) string {
 		"  A               Clear all",
 		"",
 		"Repo Actions",
+		"  h               Fetch",
 		"  o               Add repo",
 		"  s               Scan repos",
 		"  p               Pull selected",
@@ -1438,9 +1438,7 @@ func (m Model) helpView(width int) string {
 		"  j | k           Move",
 		"  space           Toggle",
 		"  Enter           Save",
-		"  ,               Cancel",
-		"  S               Cancel",
-		"  Esc             Cancel",
+		"  , | S | Esc     Cancel",
 		"",
 		"Search",
 		"  /               Open",
@@ -1458,17 +1456,7 @@ func (m Model) helpView(width int) string {
 		"  n               New list",
 		"  p               Pull list",
 		"  x               Delete list",
-		"  l               Close",
-		"  Esc             Close",
-		"",
-		"Help",
-		"  ?               Close",
-		"  Enter           Close",
-		"  Esc             Close",
-		"",
-		"Quit",
-		"  Ctrl+C          Quit",
-		"  q               Quit",
+		"  l | Esc         Close",
 		"",
 		"Press Enter, Esc, or ? to close",
 	}
@@ -1546,11 +1534,40 @@ func (m Model) renderHelpSections(sections [][]string) []string {
 			case strings.HasPrefix(line, "Press "):
 				lines = append(lines, m.fgStyle(m.theme.Muted).Render(line))
 			default:
-				lines = append(lines, m.fgStyle(m.theme.Foreground).Render(line))
+				lines = append(lines, m.renderHelpEntryLine(line))
 			}
 		}
 	}
 	return lines
+}
+
+func (m Model) renderHelpEntryLine(line string) string {
+	const keyWidth = 18
+
+	if !strings.Contains(line, " | ") || len(line) <= keyWidth {
+		return m.fgStyle(m.theme.Foreground).Render(line)
+	}
+
+	keyPart := line[:keyWidth]
+	descPart := line[keyWidth:]
+	keyStyle := m.fgStyle(m.theme.Foreground)
+	sepStyle := m.fgStyle(m.theme.Muted)
+	var b strings.Builder
+
+	segments := strings.Split(keyPart, " | ")
+	for i, segment := range segments {
+		if i > 0 {
+			b.WriteString(sepStyle.Render(" | "))
+		}
+		if segment != "" {
+			b.WriteString(keyStyle.Render(segment))
+		}
+	}
+	if descPart != "" {
+		b.WriteString(keyStyle.Render(descPart))
+	}
+
+	return b.String()
 }
 
 func (m Model) labelValue(label string, value string, width int) string {
