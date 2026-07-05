@@ -1257,7 +1257,7 @@ func (m Model) renderThemeSelector(width int, height int) string {
 	}
 	footer := m.fgStyle(m.theme.Muted).Render("j/k preview  / search  Enter select  Esc cancel")
 	body := strings.Join(append(lines, footer), "\n")
-	return m.renderSection(9, m.titleWithSearch("Theme Selector", m.themeSearchQuery), body, width, height, true)
+	return m.renderSection(-1, m.titleWithSearch("Theme Selector", m.themeSearchQuery), body, width, height, true)
 }
 
 func (m Model) renderFavoritesDialog(base string) string {
