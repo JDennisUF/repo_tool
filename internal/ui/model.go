@@ -811,10 +811,6 @@ func (m Model) View() string {
 	lw := m.leftWidth()
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
-	selectorH := 0
-	if m.themeSelecting {
-		selectorH = min(9, max(5, len(m.themeNames)+3))
-	}
 	topH := bodyH
 	outputH := 0
 	if m.width >= 64 {
@@ -827,17 +823,24 @@ func (m Model) View() string {
 	body := leftPanel
 	if rw > 0 {
 		rightPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, m.focus == focusInfo)
-		if m.themeSelecting {
-			infoH := max(5, topH-selectorH)
-			selectorBodyH := max(5, topH-infoH)
+		if m.themeSelecting && outputH > 0 {
+			infoBody := m.buildRepoInfoContent(max(1, rw-2), max(1, bodyH-2))
+			infoLines := len(strings.Split(infoBody, "\n"))
+			infoH := min(max(8, infoLines+2), max(8, bodyH/2))
+			themeH := max(5, bodyH-infoH)
 			infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, m.focus == focusInfo)
-			themePanel := m.renderThemeSelector(rw, selectorBodyH)
+			themePanel := m.renderThemeSelector(rw, themeH)
 			rightPanel = lipgloss.JoinVertical(lipgloss.Left, infoPanel, themePanel)
+			leftBottom := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
+			leftColumn := lipgloss.JoinVertical(lipgloss.Left, leftPanel, leftBottom)
+			gutter := m.renderGutter(bodyH)
+			body = lipgloss.JoinHorizontal(lipgloss.Top, leftColumn, gutter, rightPanel)
+		} else {
+			gutter := m.renderGutter(topH)
+			topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
+			outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+			body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 		}
-		gutter := m.renderGutter(topH)
-		topRow := lipgloss.JoinHorizontal(lipgloss.Top, leftPanel, gutter, rightPanel)
-		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
-		body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 	}
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
