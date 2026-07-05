@@ -1008,7 +1008,7 @@ func (m Model) renderFavoritesDialog(base string) string {
 func (m Model) favoritesDialogView(width int, rows int) string {
 	lists := m.favoriteListNames()
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=use  n=new  x=delete  Esc=close", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=use  n=new  p=pull  x=delete  Esc=close", width)),
 		"",
 	}
 
@@ -1508,6 +1508,30 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.textInput.SetValue("")
 		m.textInput.Focus()
 		m.status = "Create favorites list: enter name"
+	case "p":
+		if m.busy {
+			m.status = "Busy running pull"
+			return m, nil
+		}
+		name, ok := m.highlightedFavoriteListName()
+		if !ok {
+			m.status = "No favorites list highlighted"
+			return m, nil
+		}
+		repos := m.favoriteRepos(name)
+		if len(repos) == 0 {
+			m.status = fmt.Sprintf("No tracked repositories in favorites list: %s", name)
+			m.logInfo("Pull: no tracked repositories in favorites list: " + name)
+			return m, nil
+		}
+		m.busy = true
+		m.status = fmt.Sprintf("Pulling %d repositories from favorites list %s...", len(repos), name)
+		m.logInfo(fmt.Sprintf("--- Pull started: favorites list %s (%d repos) ---", name, len(repos)))
+		for _, r := range repos {
+			m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
+		}
+		m.scrollToBottom(m.outPanelHeight())
+		return m, pullSelectedCmd(repos)
 	case "x":
 		if name, ok := m.highlightedFavoriteListName(); ok {
 			if len(m.favoriteLists) == 1 {
@@ -1550,6 +1574,20 @@ func (m Model) highlightedFavoriteListName() (string, bool) {
 		return names[len(names)-1], true
 	}
 	return names[m.favoritesListCursor], true
+}
+
+func (m Model) favoriteRepos(listName string) []store.Repo {
+	paths := m.favoriteLists[listName]
+	if len(paths) == 0 {
+		return nil
+	}
+	repos := make([]store.Repo, 0, len(paths))
+	for _, repo := range m.repos {
+		if _, ok := paths[repo.Path]; ok {
+			repos = append(repos, repo)
+		}
+	}
+	return repos
 }
 
 func (m Model) handleInputMode(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
