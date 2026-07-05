@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 )
 
 const (
@@ -30,6 +31,7 @@ type State struct {
 
 type Settings struct {
 	ShowGitCommands bool `json:"showGitCommands,omitempty"`
+	ShowRepoInfo    bool `json:"showRepoInfo,omitempty"`
 }
 
 type Store struct {
@@ -56,6 +58,9 @@ func (s *Store) Load() (State, error) {
 	var state State
 	if err := json.Unmarshal(data, &state); err != nil {
 		return State{}, err
+	}
+	if !strings.Contains(string(data), "\"showRepoInfo\"") {
+		state.Settings.ShowRepoInfo = true
 	}
 
 	normalizedRepos := make([]Repo, 0, len(state.Repos))
@@ -112,6 +117,9 @@ func defaultState() State {
 		Repos:              []Repo{},
 		FavoriteLists:      map[string][]string{defaultFavoriteListName: []string{}},
 		ActiveFavoriteList: defaultFavoriteListName,
+		Settings: Settings{
+			ShowRepoInfo: true,
+		},
 	}
 }
 

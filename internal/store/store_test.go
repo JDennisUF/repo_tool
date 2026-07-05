@@ -44,6 +44,9 @@ func TestLoadMigratesLegacyRepoState(t *testing.T) {
 	if state.Settings.ShowGitCommands {
 		t.Fatal("show git commands should default to false")
 	}
+	if !state.Settings.ShowRepoInfo {
+		t.Fatal("show repo info should default to true for legacy state")
+	}
 }
 
 func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
@@ -64,6 +67,7 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 		ActiveFavoriteList: "work",
 		Settings: Settings{
 			ShowGitCommands: true,
+			ShowRepoInfo:    true,
 		},
 	}
 	if err := s.Save(in); err != nil {
@@ -89,5 +93,8 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	}
 	if !out.Settings.ShowGitCommands {
 		t.Fatal("show git commands should persist")
+	}
+	if !out.Settings.ShowRepoInfo {
+		t.Fatal("show repo info should persist")
 	}
 }

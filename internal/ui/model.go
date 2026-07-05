@@ -34,7 +34,6 @@ type focusSection int
 
 const (
 	focusRepos focusSection = iota
-	focusInfo
 	focusOutput
 )
 
@@ -81,6 +80,8 @@ type Model struct {
 	focus      focusSection
 	settingsDialog bool
 	settingsCursor int
+	settingsDraft  store.Settings
+	outputMaximized bool
 
 	// output panel
 	output    []outputLine
@@ -208,8 +209,6 @@ func (m *Model) setFocus(focus focusSection) {
 	switch focus {
 	case focusRepos:
 		m.status = "Focused [0] Repos"
-	case focusInfo:
-		m.status = "Focused [1] Repo Info"
 	case focusOutput:
 		m.status = "Focused [2] Command Output"
 	}
@@ -310,8 +309,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, tea.Quit
 		case "0":
 			m.setFocus(focusRepos)
-		case "1":
-			m.setFocus(focusInfo)
 		case "2":
 			m.setFocus(focusOutput)
 		case "left":
@@ -330,6 +327,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.outScroll = min(m.outScroll+1, limit)
 			} else {
 				m.moveRepoCursor(1)
+			}
+		case "enter":
+			if m.focus == focusRepos || m.focus == focusOutput {
+				m.toggleOutputMaximized()
 			}
 		case " ":
 			if idx, ok := m.currentRepoIndex(); ok {
@@ -391,8 +392,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.openThemeSelector()
 		case "l":
 			m.openFavoritesDialog()
-		case "S":
+		case "S", ",":
 			m.openSettingsDialog()
+		case "+":
+			m.toggleShowRepoInfo()
 		case "o":
 			m.inputMode = inputAddOne
 			m.textInput.SetValue("")
@@ -493,6 +496,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // outPanelHeight returns how many output lines are visible given current terminal height.
 func (m *Model) outPanelHeight() int {
 	bodyH := max(8, m.height-4)
+	if m.outputMaximized {
+		return max(1, bodyH-4)
+	}
 	if m.width < 64 {
 		return max(1, bodyH-4)
 	}
@@ -519,17 +525,21 @@ func (m *Model) repoPanelContentRows() int {
 
 // leftWidth and rightWidth split the top row with more room for the repo list.
 func (m *Model) leftWidth() int {
-	if m.width < 64 {
+	if m.width < 64 || !m.showRightColumn() {
 		return m.width
 	}
 	return (m.width*2)/3 - 1
 }
 
 func (m *Model) rightWidth() int {
-	if m.width < 64 {
+	if m.width < 64 || !m.showRightColumn() {
 		return 0
 	}
 	return m.width - m.leftWidth() - 1
+}
+
+func (m Model) showRightColumn() bool {
+	return m.settings.ShowRepoInfo || m.themeSelecting
 }
 
 func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style {
@@ -555,9 +565,13 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 	border := lipgloss.RoundedBorder()
 	innerW := max(1, width-2)
 	innerH := max(1, height-2)
+	headerText := title
+	if number >= 0 {
+		headerText = fmt.Sprintf("[%d] %s", number, title)
+	}
 	header := m.fgStyle(m.theme.Header).
 		Bold(true).
-		Render(fmt.Sprintf("[%d] %s", number, title))
+		Render(headerText)
 	headerFill := max(0, innerW-lipgloss.Width(header))
 	borderStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(borderColor)).
@@ -817,6 +831,33 @@ func (m Model) View() string {
 	lw := m.leftWidth()
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
+	if m.outputMaximized {
+		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
+		body := outputPanel
+		if m.showHelp {
+			body = m.renderHelpOverlay(body)
+		}
+		if m.favoritesDialog {
+			body = m.renderFavoritesDialog(body)
+		}
+		if m.settingsDialog {
+			body = m.renderSettingsDialog(body)
+		}
+
+		busy := "idle"
+		if m.busy {
+			busy = "busy"
+		}
+		status := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.theme.StatusText)).
+			Background(lipgloss.Color(m.theme.Status)).
+			Width(max(1, m.width)).
+			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
+		keys := m.fgStyle(m.theme.Muted).
+			Width(max(1, m.width)).
+			Render(" [0]/[2] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
+	}
 	topH := bodyH
 	outputH := 0
 	if m.width >= 64 {
@@ -828,15 +869,22 @@ func (m Model) View() string {
 
 	body := leftPanel
 	if rw > 0 {
-		rightPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, m.focus == focusInfo)
+		rightPanel := ""
+		if m.settings.ShowRepoInfo {
+			rightPanel = m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, topH-2)), rw, topH, false)
+		}
 		if m.themeSelecting && outputH > 0 {
-			infoBody := m.buildRepoInfoContent(max(1, rw-2), max(1, bodyH-2))
-			infoLines := len(strings.Split(infoBody, "\n"))
-			infoH := min(max(8, infoLines+2), max(8, bodyH/2))
-			themeH := max(5, bodyH-infoH)
-			infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, m.focus == focusInfo)
-			themePanel := m.renderThemeSelector(rw, themeH)
-			rightPanel = lipgloss.JoinVertical(lipgloss.Left, infoPanel, themePanel)
+			if m.settings.ShowRepoInfo {
+				infoBody := m.buildRepoInfoContent(max(1, rw-2), max(1, bodyH-2))
+				infoLines := len(strings.Split(infoBody, "\n"))
+				infoH := min(max(8, infoLines+2), max(8, bodyH/2))
+				themeH := max(5, bodyH-infoH)
+				infoPanel := m.renderSection(1, "Repo Info", m.buildRepoInfoContent(max(1, rw-2), max(1, infoH-2)), rw, infoH, false)
+				themePanel := m.renderThemeSelector(rw, themeH)
+				rightPanel = lipgloss.JoinVertical(lipgloss.Left, infoPanel, themePanel)
+			} else {
+				rightPanel = m.renderThemeSelector(rw, bodyH)
+			}
 			leftBottom := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, lw-2), max(1, outputH-2)), lw, outputH, m.focus == focusOutput)
 			leftColumn := lipgloss.JoinVertical(lipgloss.Left, leftPanel, leftBottom)
 			gutter := m.renderGutter(bodyH)
@@ -847,6 +895,9 @@ func (m Model) View() string {
 			outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
 			body = lipgloss.JoinVertical(lipgloss.Left, topRow, outputPanel)
 		}
+	} else if outputH > 0 {
+		outputPanel := m.renderSection(2, "Command Output", m.buildOutputContent(max(1, m.width-2), max(1, outputH-2)), m.width, outputH, m.focus == focusOutput)
+		body = lipgloss.JoinVertical(lipgloss.Left, leftPanel, outputPanel)
 	}
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
@@ -870,7 +921,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1]/[2] focus  left/right cycle panels  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[2] focus  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1020,7 +1071,7 @@ func (m Model) renderSettingsDialog(base string) string {
 	screenH := max(1, m.height-2)
 	dialogW := min(max(38, screenW-8), 72)
 	dialogH := min(max(10, screenH-6), 16)
-	dialog := m.renderSection(6, "Settings", m.settingsDialogView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
+	dialog := m.renderSection(-1, "Settings", m.settingsDialogView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
 
 	top := max(0, (screenH-dialogH)/2)
 	left := max(0, (screenW-dialogW)/2)
@@ -1041,22 +1092,30 @@ func (m Model) renderSettingsDialog(base string) string {
 
 func (m Model) settingsDialogView(width int, rows int) string {
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight("Enter/Space=toggle  Esc=close", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight("Space=toggle  Enter=save  Esc=cancel", width)),
 		"",
 	}
 
-	label := "Show git command lines in output"
-	value := "[ ]"
-	style := m.fgStyle(m.theme.Foreground)
-	if m.settings.ShowGitCommands {
-		value = "[x]"
+	items := []struct {
+		label string
+		value bool
+	}{
+		{label: "Show Git Commands", value: m.settingsDraft.ShowGitCommands},
+		{label: "Show Repo Info", value: m.settingsDraft.ShowRepoInfo},
 	}
-	if m.settingsCursor == 0 {
-		style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+	for i, item := range items {
+		value := "[ ]"
+		style := m.fgStyle(m.theme.Foreground)
+		marker := "  "
+		if item.value {
+			value = "[x]"
+		}
+		if m.settingsCursor == i {
+			marker = "> "
+			style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+		}
+		lines = append(lines, style.Render(trimRight(marker+value+" "+item.label, width)))
 	}
-	lines = append(lines, style.Render(trimRight("> "+value+" "+label, width)))
-	lines = append(lines, "")
-	lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight("More settings can be added here later.", width)))
 
 	return strings.Join(limitLines(lines, rows), "\n")
 }
@@ -1108,46 +1167,82 @@ func (m Model) favoritesDialogView(width int, rows int) string {
 func (m Model) helpView() string {
 	raw := []string{
 		"Navigation",
-		"  j/k or up/down  Move highlight",
-		"  left/right      Cycle focused panel",
-		"  space           Toggle selection on highlighted repo",
+		"  j/k             Move / scroll output",
+		"  up/down         Move / scroll output",
+		"  left/right      Cycle focus",
+		"  0               Focus repos",
+		"  2               Focus output",
+		"  Enter           Max output",
+		"  PgUp / PgDn     Page output",
+		"  space           Toggle select",
 		"",
 		"Favorites",
-		"  f               Toggle favorites-only filter",
-		"  F               Toggle favorite on highlighted repo",
-		"  l               Open favorites list dialog",
+		"  f               Toggle filter",
+		"  F               Toggle favorite",
+		"  l               Open lists",
+		"  n               New list",
+		"  p               Pull list",
+		"  x               Delete list",
 		"",
 		"Refresh",
-		"  r               Refresh highlighted repo status",
-		"  R               Refresh all repo statuses",
+		"  r               Refresh repo",
+		"  R               Refresh all",
 		"",
 		"Selection",
-		"  a               Select all repos",
-		"  A               Deselect all repos",
+		"  a               Select all",
+		"  A               Clear all",
 		"",
-		"Repository actions",
-		"  o               Add one repository by path",
-		"  s               Scan a directory and add discovered repositories",
-		"  p               Pull all selected repositories",
-		"  x               Remove highlighted repository from tracking",
-		"  z               Launch lazygit for highlighted repository",
-		"  v               Open highlighted repository in VS Code",
-		"  Z               Open highlighted repository in Zed",
-		"",
-		"Output panel",
-		"  2               Focus command output panel",
-		"  j/k             Scroll command output panel",
-		"  PgUp / PgDn     Scroll command output panel",
+		"Repo Actions",
+		"  o               Add repo",
+		"  s               Scan repos",
+		"  p               Pull selected",
+		"  x               Remove repo",
+		"  z               Open lazygit",
+		"  v               Open VS Code",
+		"  Z               Open Zed",
 		"",
 		"UI",
-		"  0               Focus repositories",
-		"  1               Focus repo info",
-		"  2               Focus command output",
-		"  Left / Right    Cycle through panels",
-		"  S               Open settings",
-		"  T               Open theme selector",
-		"  ?               Toggle this help screen",
-		"  q / Ctrl+C      Quit",
+		"  +               Toggle repo info",
+		"  ,               Settings",
+		"  S               Settings",
+		"  T               Themes",
+		"  ?               Help",
+		"  q               Quit",
+		"",
+		"Settings",
+		"  j/k             Move",
+		"  space           Toggle",
+		"  Enter           Save",
+		"  ,               Cancel",
+		"  S               Cancel",
+		"  q               Cancel",
+		"  Esc             Cancel",
+		"",
+		"Themes",
+		"  j/k             Preview",
+		"  Enter           Select",
+		"  q               Cancel",
+		"  Esc             Cancel",
+		"",
+		"Lists",
+		"  j/k             Move",
+		"  Enter           Use list",
+		"  n               New list",
+		"  p               Pull list",
+		"  x               Delete list",
+		"  l               Close",
+		"  q               Close",
+		"  Esc             Close",
+		"",
+		"Help",
+		"  ?               Close",
+		"  q               Close",
+		"  Enter           Close",
+		"  Esc             Close",
+		"",
+		"Quit",
+		"  Ctrl+C          Quit",
+		"  q               Quit main",
 		"",
 		"Press Enter, Esc, or ? to close",
 	}
@@ -1198,28 +1293,75 @@ func (m *Model) openThemeSelector() {
 func (m *Model) openSettingsDialog() {
 	m.settingsDialog = true
 	m.settingsCursor = 0
-	m.status = "Settings: Enter or Space toggles, Esc closes"
+	m.settingsDraft = m.settings
+	m.status = "Settings: Space toggles, Enter saves, Esc cancels"
 }
 
 func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
-	case "esc", "q", "S":
+	case "esc", "q", "S", ",":
 		m.settingsDialog = false
-		m.status = "Closed settings"
-	case "up", "k", "down", "j":
-		m.settingsCursor = 0
-	case " ", "enter":
-		m.settings.ShowGitCommands = !m.settings.ShowGitCommands
+		m.settingsDraft = m.settings
+		m.status = "Canceled settings"
+	case "up", "k":
+		m.moveSettingsCursor(-1)
+	case "down", "j":
+		m.moveSettingsCursor(1)
+	case " ":
+		m.toggleCurrentSetting()
+	case "enter":
+		m.settings = m.settingsDraft
+		m.settingsDialog = false
 		m.persist()
-		if m.settings.ShowGitCommands {
-			m.status = "Enabled: show git command lines in output"
-		} else {
-			m.status = "Disabled: show git command lines in output"
-		}
+		m.status = "Saved settings"
 	}
 	return m, nil
+}
+
+func (m *Model) moveSettingsCursor(delta int) {
+	const settingsCount = 2
+	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
+}
+
+func (m *Model) toggleCurrentSetting() {
+	switch m.settingsCursor {
+	case 0:
+		m.settingsDraft.ShowGitCommands = !m.settingsDraft.ShowGitCommands
+		if m.settingsDraft.ShowGitCommands {
+			m.status = "Will enable: show git command lines"
+		} else {
+			m.status = "Will disable: show git command lines"
+		}
+	case 1:
+		m.settingsDraft.ShowRepoInfo = !m.settingsDraft.ShowRepoInfo
+		if m.settingsDraft.ShowRepoInfo {
+			m.status = "Will enable: show repo info"
+		} else {
+			m.status = "Will disable: show repo info"
+		}
+	}
+}
+
+func (m *Model) toggleShowRepoInfo() {
+	m.settings.ShowRepoInfo = !m.settings.ShowRepoInfo
+	m.persist()
+	if m.settings.ShowRepoInfo {
+		m.status = "Enabled: show repo info"
+	} else {
+		m.status = "Disabled: show repo info"
+	}
+}
+
+func (m *Model) toggleOutputMaximized() {
+	m.outputMaximized = !m.outputMaximized
+	if m.outputMaximized {
+		m.focus = focusOutput
+		m.status = "Maximized command output"
+		return
+	}
+	m.status = "Normal command output"
 }
 
 func (m Model) handleThemeSelector(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
