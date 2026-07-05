@@ -289,6 +289,24 @@
       "input": "#BC8CFF",
       "rowFocusBg": "#1F2937"
     },
+    "GitHub Light": {
+      "background": "#FFFFFF",
+      "foreground": "#1F2328",
+      "muted": "#656D76",
+      "border": "#D0D7DE",
+      "borderFocus": "#0969DA",
+      "header": "#8250DF",
+      "accent": "#0969DA",
+      "selection": "#1A7F37",
+      "success": "#1A7F37",
+      "error": "#CF222E",
+      "warning": "#9A6700",
+      "status": "#F6F8FA",
+      "statusText": "#1F2328",
+      "cursor": "#0969DA",
+      "input": "#8250DF",
+      "rowFocusBg": "#DDF4FF"
+    },
     "Green Terminal": {
       "background": "#071407",
       "foreground": "#6BFF6B",

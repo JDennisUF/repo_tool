@@ -163,13 +163,15 @@ func resolveThemeName(themes map[string]themePalette, requested string) string {
 	}
 
 	aliases := map[string]string{
-		"aurora":   "Aurora",
-		"cobalt":   "Cobalt",
-		"daylight": "Daylight",
-		"ember":    "Ember",
-		"graphite": "Graphite",
-		"violet":   "Violet",
-		"fallback": "Fallback",
+		"aurora":       "Aurora",
+		"cobalt":       "Cobalt",
+		"daylight":     "Daylight",
+		"ember":        "Ember",
+		"github dark":  "GitHub Dark",
+		"github light": "GitHub Light",
+		"graphite":     "Graphite",
+		"violet":       "Violet",
+		"fallback":     "Fallback",
 	}
 	if canonical, ok := aliases[strings.ToLower(requested)]; ok {
 		if _, exists := themes[canonical]; exists {

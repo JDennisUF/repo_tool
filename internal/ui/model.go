@@ -668,7 +668,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 				fav = "*"
 			}
 
-			statusStyle := m.fgBgStyle(m.theme.Warning, rowBg)
+			statusStyle := m.fgBgStyle(m.theme.Warning, rowBg).Bold(true)
 			switch status {
 			case gitutil.StatusCurrent:
 				statusStyle = statusStyle.Foreground(lipgloss.Color(m.theme.Success))
