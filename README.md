@@ -19,6 +19,7 @@ Terminal UI utility for tracking many Git repositories and running actions acros
 - Gerrit settings for username, server, and base git directory
 - Gerrit project browser with a scrollable checkbox list for large `ls-projects` results
 - Clone tracked Gerrit repos on demand after tracking them
+- Lightweight remote branch tracking from local `origin/*` refs after refresh/fetch/pull/clone
 - Toggle repo info panel (`+`)
 - Two focusable sections (`0`, `1`)
 - JSON-backed color themes

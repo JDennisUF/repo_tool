@@ -61,7 +61,7 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 
 	in := State{
 		Repos: []Repo{
-			{Name: "repo", Path: "/tmp/repo", Selected: true, LastOp: "pull ok", LastUpdated: "2026-07-02T10:11:12Z"},
+			{Name: "repo", Path: "/tmp/repo", Selected: true, RemoteBranches: []string{"origin/z", "origin/a", "origin/a"}, NewRemoteBranches: []string{"origin/z"}, LastOp: "pull ok", LastUpdated: "2026-07-02T10:11:12Z"},
 			{Name: "proj", Path: "/tmp/git/proj", GerritProject: "team/proj", RemoteURL: "ssh://alice@gerrit/team/proj"},
 		},
 		FavoriteLists: map[string][]string{
@@ -107,6 +107,12 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	}
 	if localRepo.LastUpdated != "2026-07-02T10:11:12Z" {
 		t.Fatalf("last updated = %q, want %q", localRepo.LastUpdated, "2026-07-02T10:11:12Z")
+	}
+	if got := localRepo.RemoteBranches; len(got) != 2 || got[0] != "origin/a" || got[1] != "origin/z" {
+		t.Fatalf("remote branches = %#v, want [origin/a origin/z]", got)
+	}
+	if got := localRepo.NewRemoteBranches; len(got) != 1 || got[0] != "origin/z" {
+		t.Fatalf("new remote branches = %#v, want [origin/z]", got)
 	}
 	if got := gerritRepo.GerritProject; got != "team/proj" {
 		t.Fatalf("gerrit project = %q, want %q", got, "team/proj")
@@ -178,5 +184,34 @@ func TestLoadDeduplicatesByGerritProject(t *testing.T) {
 	}
 	if got := state.Repos[0].GerritProject; got != "team/proj" {
 		t.Fatalf("project = %q, want team/proj", got)
+	}
+}
+
+func TestLoadDeduplicatesByPathAcrossRepoTypes(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.json")
+	data := []byte(`{
+  "repos": [
+    {"name":"local","path":"/tmp/git/proj"},
+    {"name":"gerrit","path":"/tmp/git/proj","gerritProject":"team/proj","remoteUrl":"ssh://alice@gerrit/team/proj"}
+  ]
+}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	s := &Store{path: path}
+	state, err := s.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+
+	if got := len(state.Repos); got != 1 {
+		t.Fatalf("repo count = %d, want 1", got)
+	}
+	if got := state.Repos[0].Path; got != "/tmp/git/proj" {
+		t.Fatalf("path = %q, want /tmp/git/proj", got)
 	}
 }

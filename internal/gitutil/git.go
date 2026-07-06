@@ -19,6 +19,7 @@ type RepoMetadata struct {
 	Status           RepoStatus
 	CurrentBranch    string
 	LocalBranches    []string
+	RemoteBranches   []string
 	AheadCount       int
 	BehindCount      int
 	HasUpstream      bool
@@ -248,9 +249,10 @@ func InspectRepoMetadata(path string) RepoMetadata {
 	}
 
 	meta := RepoMetadata{
-		Status:        inspectPorcelainStatus(strings.TrimSpace(stdout.String())),
-		CurrentBranch: currentBranch(path),
-		LocalBranches: localBranches(path),
+		Status:         inspectPorcelainStatus(strings.TrimSpace(stdout.String())),
+		CurrentBranch:  currentBranch(path),
+		LocalBranches:  localBranches(path),
+		RemoteBranches: remoteBranches(path),
 	}
 	meta.AheadCount, meta.BehindCount, meta.HasUpstream = upstreamDivergence(path)
 	meta.LastCommitAuthor, meta.LastCommitAt = lastCommitInfo(path)
@@ -294,6 +296,26 @@ func localBranches(path string) []string {
 	for _, line := range lines {
 		name := strings.TrimSpace(line)
 		if name == "" {
+			continue
+		}
+		branches = append(branches, name)
+	}
+	sort.Strings(branches)
+	return branches
+}
+
+func remoteBranches(path string) []string {
+	cmd := exec.Command("git", "-C", path, "for-each-ref", "--format=%(refname:short)", "refs/remotes/origin")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return nil
+	}
+	lines := strings.Split(strings.TrimSpace(stdout.String()), "\n")
+	branches := make([]string, 0, len(lines))
+	for _, line := range lines {
+		name := strings.TrimSpace(line)
+		if name == "" || name == "origin/HEAD" {
 			continue
 		}
 		branches = append(branches, name)

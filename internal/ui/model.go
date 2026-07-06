@@ -353,7 +353,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					failures++
 					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
 				} else {
-					m.repos[i].LastOp = "pull ok"
+					m.refreshRepoStatus(m.repos[i])
+					newCount := m.syncRemoteBranchTracking(i)
+					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("pull ok", newCount)
 					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
 					successes++
 					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
@@ -361,7 +363,6 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		}
 		m.persist()
-		m.refreshRepoStatuses()
 		summary := fmt.Sprintf("Pull complete: %d ok, %d failed", successes, failures)
 		m.status = summary
 		m.logInfo("--- " + summary + " ---")
@@ -378,15 +379,20 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					continue
 				}
 				if r.err != nil {
+					m.repos[i].LastOp = "fetch failed"
 					failures++
 					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
 				} else {
+					m.refreshRepoStatus(m.repos[i])
+					newCount := m.syncRemoteBranchTracking(i)
+					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("fetch ok", newCount)
+					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
 					successes++
 					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
 				}
 			}
 		}
-		m.refreshRepoStatuses()
+		m.persist()
 		summary := fmt.Sprintf("Fetch complete: %d ok, %d failed", successes, failures)
 		m.status = summary
 		m.logInfo("--- " + summary + " ---")
@@ -412,6 +418,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 					successes++
 					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
 					m.refreshRepoStatus(m.repos[i])
+					newCount := m.syncRemoteBranchTracking(i)
+					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("clone ok", newCount)
 				}
 			}
 		}
@@ -573,13 +581,26 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if idx, ok := m.currentRepoIndex(); ok {
 				repo := m.repos[idx]
 				m.refreshRepoStatus(repo)
+				newCount := m.syncRemoteBranchTracking(idx)
 				m.status = fmt.Sprintf("Refreshed repo status: %s", repo.Name)
+				if newCount > 0 {
+					m.status = fmt.Sprintf("Refreshed repo status: %s (+%d remote branches)", repo.Name, newCount)
+				}
 				m.logInfo(fmt.Sprintf("refresh: %s (%s)", repo.Name, fallbackValue(repo.Path, repo.GerritProject)))
+				m.persist()
 			}
 		case "R":
 			m.refreshRepoStatuses()
+			totalNewRemoteBranches := 0
+			for i := range m.repos {
+				totalNewRemoteBranches += m.syncRemoteBranchTracking(i)
+			}
 			m.status = fmt.Sprintf("Refreshed statuses for %d repositories", len(m.repos))
+			if totalNewRemoteBranches > 0 {
+				m.status = fmt.Sprintf("Refreshed statuses for %d repositories (+%d remote branches)", len(m.repos), totalNewRemoteBranches)
+			}
 			m.logInfo(fmt.Sprintf("refresh all: %d repositories", len(m.repos)))
+			m.persist()
 		case "a":
 			visible := m.visibleRepoIndexes()
 			for _, i := range visible {
@@ -1030,25 +1051,44 @@ func (m Model) inspectRepo(repo store.Repo) gitutil.RepoMetadata {
 	return gitutil.InspectRepoMetadata(repo.Path)
 }
 
+func (m *Model) syncRemoteBranchTracking(repoIndex int) int {
+	if repoIndex < 0 || repoIndex >= len(m.repos) {
+		return 0
+	}
+	repo := m.repos[repoIndex]
+	meta := m.repoMetadata(repo)
+	if meta.Status == gitutil.StatusNotCloned {
+		return 0
+	}
+	newBranches := diffBranches(meta.RemoteBranches, repo.RemoteBranches)
+	m.repos[repoIndex].RemoteBranches = append([]string(nil), meta.RemoteBranches...)
+	m.repos[repoIndex].NewRemoteBranches = newBranches
+	return len(newBranches)
+}
+
 func (m Model) hasLocalRepo(repo store.Repo) bool {
 	return m.repoStatus(repo) != gitutil.StatusNotCloned
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
 	contentW := max(1, width-1)
-	branchW := 10
+	branchW := 12
 	updatedW := 5
 	syncW := 7
 	ageW := 5
 	authorW := 16
-	const minOpW = 12
-	const baseWidthWithoutNameOrOp = 67
-	maxNameW := 22
-	if !m.settings.ShowRepoInfo {
-		maxNameW = 28
-	}
-	nameW := max(6, min(maxNameW, contentW-baseWidthWithoutNameOrOp-minOpW))
-	opW := max(minOpW, contentW-baseWidthWithoutNameOrOp-nameW)
+	nameW := 18
+	opW := 10
+	const separatorCount = 9
+	fixedW := 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
+	flexibleW := nameW + branchW + authorW + opW
+	slack := max(0, contentW-fixedW-flexibleW)
+	nameExtra := slack / 2
+	authorExtra := slack / 3
+	branchExtra := slack - nameExtra - authorExtra
+	nameW += nameExtra
+	authorW += authorExtra
+	branchW += branchExtra
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(
@@ -1208,6 +1248,8 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 		m.labelValue("Path", r.Path, width),
 		m.labelValue("Branch", currentBranch, width),
 		m.labelValue("Status", status.Description(), width),
+		m.labelValue("Remote Refs", formatRemoteBranchCount(len(meta.RemoteBranches)), width),
+		m.labelValue("New Remote", formatRemoteBranchCount(len(r.NewRemoteBranches)), width),
 		m.labelValue("Commit Age", formatCommitAge(meta.LastCommitAt), width),
 		m.labelValue("Commit By", fallbackValue(meta.LastCommitAuthor, "none"), width),
 		m.labelValue("Updated", lastUpdated, width),
@@ -1220,6 +1262,12 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 		lines = append(lines, m.labelValue("", "(none)", width))
 	} else {
 		for _, branch := range meta.LocalBranches {
+			lines = append(lines, m.labelValue("", branch, width))
+		}
+	}
+	if len(r.NewRemoteBranches) > 0 {
+		lines = append(lines, m.labelValue("Remote Branches", "", width))
+		for _, branch := range r.NewRemoteBranches {
 			lines = append(lines, m.labelValue("", branch, width))
 		}
 	}
@@ -2798,9 +2846,23 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 	}
 
 	for _, r := range m.repos {
-		if m.repoKey(r) == path {
+		if r.Path == path || m.repoKey(r) == path {
 			return false, nil
 		}
+	}
+	for i := range m.repos {
+		expectedPath := m.expectedRepoPath(m.repos[i])
+		if expectedPath == "" || expectedPath != path {
+			continue
+		}
+		m.repos[i].Path = path
+		if m.repos[i].Name == "" {
+			m.repos[i].Name = filepath.Base(path)
+		}
+		m.refreshRepoStatus(m.repos[i])
+		m.normalizeCursor()
+		m.persist()
+		return false, nil
 	}
 
 	m.repos = append(m.repos, store.Repo{
@@ -2821,7 +2883,7 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 }
 
 func (m *Model) trackGerritProject(project string) bool {
-	project = strings.Trim(strings.TrimSpace(project), "/")
+	project = m.normalizeGerritProject(project)
 	if project == "" {
 		return false
 	}
@@ -2840,6 +2902,17 @@ func (m *Model) trackGerritProject(project string) bool {
 	}
 
 	for i := range m.repos {
+		if path != "" && m.repos[i].Path == path {
+			if m.repos[i].GerritProject == "" {
+				m.repos[i].GerritProject = project
+			}
+			m.repos[i].RemoteURL = remoteURL
+			if m.repos[i].Name == "" {
+				m.repos[i].Name = filepath.Base(project)
+			}
+			m.refreshRepoStatus(m.repos[i])
+			return false
+		}
 		if m.repos[i].GerritProject == project {
 			if m.repos[i].Path == "" || !gitutil.IsGitRepo(m.repos[i].Path) {
 				m.repos[i].Path = path
@@ -2876,6 +2949,47 @@ func (m Model) gerritConfig() gerrit.Config {
 		Server:   strings.TrimSpace(m.settings.GerritServer),
 		BaseDir:  strings.TrimSpace(m.settings.BaseGitDir),
 	}
+}
+
+func (m Model) expectedRepoPath(repo store.Repo) string {
+	if strings.TrimSpace(repo.GerritProject) == "" {
+		return ""
+	}
+	cfg := m.gerritConfig()
+	baseDir := cfg.BaseDir
+	if expandedBaseDir, err := expandPath(baseDir); err == nil {
+		baseDir = expandedBaseDir
+	}
+	if strings.TrimSpace(baseDir) == "" {
+		return ""
+	}
+	return gerrit.LocalPath(baseDir, repo.GerritProject)
+}
+
+func (m Model) normalizeGerritProject(project string) string {
+	project = strings.Trim(strings.TrimSpace(project), "/")
+	if project == "" {
+		return ""
+	}
+
+	cfg := m.gerritConfig()
+	baseDir := cfg.BaseDir
+	if expandedBaseDir, err := expandPath(baseDir); err == nil {
+		baseDir = expandedBaseDir
+	}
+
+	if strings.HasPrefix(project, "~") || strings.HasPrefix(project, "/") {
+		if expandedProject, err := expandPath(project); err == nil && strings.TrimSpace(baseDir) != "" {
+			if rel, err := filepath.Rel(baseDir, expandedProject); err == nil {
+				rel = filepath.ToSlash(rel)
+				if rel != "." && !strings.HasPrefix(rel, "../") && rel != ".." {
+					return strings.Trim(rel, "/")
+				}
+			}
+		}
+	}
+
+	return project
 }
 
 func (m Model) isCloneableRepo(repo store.Repo) bool {
@@ -3267,6 +3381,44 @@ func fallbackValue(value string, fallback string) string {
 		return fallback
 	}
 	return value
+}
+
+func formatRemoteBranchCount(count int) string {
+	if count == 0 {
+		return "0"
+	}
+	if count == 1 {
+		return "1 branch"
+	}
+	return fmt.Sprintf("%d branches", count)
+}
+
+func formatOpWithRemoteBranchDelta(base string, newCount int) string {
+	if newCount <= 0 {
+		return base
+	}
+	if newCount == 1 {
+		return base + " (+1 remote branch)"
+	}
+	return fmt.Sprintf("%s (+%d remote branches)", base, newCount)
+}
+
+func diffBranches(current []string, previous []string) []string {
+	if len(current) == 0 {
+		return nil
+	}
+	seen := make(map[string]struct{}, len(previous))
+	for _, branch := range previous {
+		seen[branch] = struct{}{}
+	}
+	newBranches := make([]string, 0, len(current))
+	for _, branch := range current {
+		if _, ok := seen[branch]; ok {
+			continue
+		}
+		newBranches = append(newBranches, branch)
+	}
+	return newBranches
 }
 
 func formatSyncCounts(meta gitutil.RepoMetadata) string {

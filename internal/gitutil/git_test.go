@@ -80,6 +80,9 @@ func TestInspectRepoMetadataBranches(t *testing.T) {
 	if len(meta.LocalBranches) < 3 {
 		t.Fatalf("local branch count = %d, want at least 3 (%v)", len(meta.LocalBranches), meta.LocalBranches)
 	}
+	if len(meta.RemoteBranches) != 0 {
+		t.Fatalf("remote branches = %v, want none without origin", meta.RemoteBranches)
+	}
 	if !containsString(meta.LocalBranches, "bugfix/test") || !containsString(meta.LocalBranches, "feature/test") {
 		t.Fatalf("local branches = %v, want bugfix/test and feature/test", meta.LocalBranches)
 	}
@@ -88,6 +91,20 @@ func TestInspectRepoMetadataBranches(t *testing.T) {
 	}
 	if meta.LastCommitAt.IsZero() {
 		t.Fatal("expected last commit time to be populated")
+	}
+}
+
+func TestInspectRepoMetadataRemoteBranches(t *testing.T) {
+	remote := seededRemoteWithBranches(t, "develop", "draft")
+	target := filepath.Join(t.TempDir(), "clone")
+	runGit(t, "", "clone", remote, target)
+
+	meta := InspectRepoMetadata(target)
+	if !containsString(meta.RemoteBranches, "origin/develop") || !containsString(meta.RemoteBranches, "origin/draft") {
+		t.Fatalf("remote branches = %v, want origin/develop and origin/draft", meta.RemoteBranches)
+	}
+	if containsString(meta.RemoteBranches, "origin/HEAD") {
+		t.Fatalf("remote branches should not include origin/HEAD: %v", meta.RemoteBranches)
 	}
 }
 

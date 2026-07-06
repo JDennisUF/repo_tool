@@ -23,3 +23,4 @@ This file tracks the Gerrit work so the implementation can resume cleanly.
 - The app now stores Gerrit project identity separately from local checkout path and can preserve tracked repos that are not cloned yet.
 - The Gerrit picker now renders the full `ls-projects` result in a scrollable checkbox list and tracks checked projects on `Enter`.
 - Clone now prefers `develop` after checkout, then `draft`, before falling back to the remote default branch.
+- Cloned repos now track local `origin/*` refs after refresh/fetch/pull/clone and surface newly seen remote branches without adding extra network calls.

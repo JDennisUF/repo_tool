@@ -15,13 +15,15 @@ const (
 )
 
 type Repo struct {
-	Name          string `json:"name"`
-	Path          string `json:"path,omitempty"`
-	GerritProject string `json:"gerritProject,omitempty"`
-	RemoteURL     string `json:"remoteUrl,omitempty"`
-	Selected      bool   `json:"selected"`
-	LastOp        string `json:"lastOp,omitempty"`
-	LastUpdated   string `json:"lastUpdated,omitempty"`
+	Name              string   `json:"name"`
+	Path              string   `json:"path,omitempty"`
+	GerritProject     string   `json:"gerritProject,omitempty"`
+	RemoteURL         string   `json:"remoteUrl,omitempty"`
+	RemoteBranches    []string `json:"remoteBranches,omitempty"`
+	NewRemoteBranches []string `json:"newRemoteBranches,omitempty"`
+	Selected          bool     `json:"selected"`
+	LastOp            string   `json:"lastOp,omitempty"`
+	LastUpdated       string   `json:"lastUpdated,omitempty"`
 }
 
 type State struct {
@@ -70,15 +72,21 @@ func (s *Store) Load() (State, error) {
 
 	normalizedRepos := make([]Repo, 0, len(state.Repos))
 	seen := map[string]struct{}{}
+	seenPaths := map[string]struct{}{}
 	for _, r := range state.Repos {
 		if r.Path == "" && r.GerritProject == "" {
 			continue
 		}
 		if r.Path != "" {
 			r.Path = filepath.Clean(r.Path)
+			if _, exists := seenPaths[r.Path]; exists {
+				continue
+			}
 		}
 		r.GerritProject = strings.Trim(strings.TrimSpace(r.GerritProject), "/")
 		r.RemoteURL = strings.TrimSpace(r.RemoteURL)
+		r.RemoteBranches = normalizeBranchNames(r.RemoteBranches)
+		r.NewRemoteBranches = normalizeBranchNames(r.NewRemoteBranches)
 		if r.Name == "" {
 			switch {
 			case r.GerritProject != "":
@@ -96,6 +104,9 @@ func (s *Store) Load() (State, error) {
 		}
 		normalizedRepos = append(normalizedRepos, r)
 		seen[key] = struct{}{}
+		if r.Path != "" {
+			seenPaths[r.Path] = struct{}{}
+		}
 	}
 
 	sort.Slice(normalizedRepos, func(i, j int) bool {
@@ -112,6 +123,30 @@ func (s *Store) Load() (State, error) {
 	}
 
 	return state, nil
+}
+
+func normalizeBranchNames(branches []string) []string {
+	if len(branches) == 0 {
+		return nil
+	}
+	seen := map[string]struct{}{}
+	normalized := make([]string, 0, len(branches))
+	for _, branch := range branches {
+		name := strings.TrimSpace(branch)
+		if name == "" {
+			continue
+		}
+		if _, ok := seen[name]; ok {
+			continue
+		}
+		seen[name] = struct{}{}
+		normalized = append(normalized, name)
+	}
+	sort.Strings(normalized)
+	if len(normalized) == 0 {
+		return nil
+	}
+	return normalized
 }
 
 func RepoKey(repo Repo) string {
