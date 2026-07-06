@@ -2,6 +2,7 @@ package gitutil
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
@@ -72,13 +73,35 @@ func (s RepoStatus) Description() string {
 }
 
 func IsGitRepo(path string) bool {
-	cmd := exec.Command("git", "-C", path, "rev-parse", "--is-inside-work-tree")
+	cleanPath := filepath.Clean(path)
+
+	cmd := exec.Command("git", "-C", cleanPath, "rev-parse", "--show-toplevel")
+	var stdout bytes.Buffer
+	cmd.Stdout = &stdout
 	if err := cmd.Run(); err == nil {
-		return true
+		return filepath.Clean(strings.TrimSpace(stdout.String())) == cleanPath
 	}
 
-	cmd = exec.Command("git", "-C", path, "rev-parse", "--is-bare-repository")
-	return cmd.Run() == nil
+	stdout.Reset()
+	cmd = exec.Command("git", "-C", cleanPath, "rev-parse", "--absolute-git-dir")
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+
+	gitDir := filepath.Clean(strings.TrimSpace(stdout.String()))
+
+	stdout.Reset()
+	cmd = exec.Command("git", "-C", cleanPath, "rev-parse", "--is-bare-repository")
+	cmd.Stdout = &stdout
+	if err := cmd.Run(); err != nil {
+		return false
+	}
+	if strings.TrimSpace(stdout.String()) != "true" {
+		return false
+	}
+
+	return gitDir == cleanPath
 }
 
 func Pull(path string) (string, error) {
@@ -153,11 +176,56 @@ func Clone(remoteURL string, path string) (string, error) {
 	if err != nil {
 		return combined, fmt.Errorf("clone failed: %w", err)
 	}
+
+	branchOutput, branchErr := checkoutPreferredBranch(path)
+	if branchOutput != "" {
+		combined = strings.TrimSpace(strings.Join([]string{combined, branchOutput}, "\n"))
+	}
+	if branchErr != nil {
+		return combined, branchErr
+	}
 	return combined, nil
 }
 
 func CloneCommand(remoteURL string, path string) string {
 	return fmt.Sprintf("git clone %s %s", strconv.Quote(remoteURL), strconv.Quote(path))
+}
+
+func checkoutPreferredBranch(path string) (string, error) {
+	for _, branch := range []string{"develop", "draft"} {
+		exists, err := remoteBranchExists(path, branch)
+		if err != nil {
+			return "", err
+		}
+		if !exists {
+			continue
+		}
+		cmd := exec.Command("git", "-C", path, "checkout", "-B", branch, "--track", "origin/"+branch)
+		var stdout bytes.Buffer
+		var stderr bytes.Buffer
+		cmd.Stdout = &stdout
+		cmd.Stderr = &stderr
+		if err := cmd.Run(); err != nil {
+			out := strings.TrimSpace(strings.Join([]string{stdout.String(), stderr.String()}, "\n"))
+			return strings.TrimSpace(out), fmt.Errorf("checkout %s failed: %w", branch, err)
+		}
+		out := strings.TrimSpace(strings.Join([]string{stdout.String(), stderr.String()}, "\n"))
+		return strings.TrimSpace(out), nil
+	}
+	return "", nil
+}
+
+func remoteBranchExists(path string, branch string) (bool, error) {
+	cmd := exec.Command("git", "-C", path, "show-ref", "--verify", "--quiet", "refs/remotes/origin/"+branch)
+	err := cmd.Run()
+	if err == nil {
+		return true, nil
+	}
+	var exitErr *exec.ExitError
+	if errors.As(err, &exitErr) {
+		return false, nil
+	}
+	return false, err
 }
 
 func InspectStatus(path string) RepoStatus {

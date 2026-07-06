@@ -22,3 +22,4 @@ This file tracks the Gerrit work so the implementation can resume cleanly.
 - Favorites and repo metadata caches currently key off local path; they will need to move to a stable repo key.
 - The app now stores Gerrit project identity separately from local checkout path and can preserve tracked repos that are not cloned yet.
 - The Gerrit picker now renders the full `ls-projects` result in a scrollable checkbox list and tracks checked projects on `Enter`.
+- Clone now prefers `develop` after checkout, then `draft`, before falling back to the remote default branch.

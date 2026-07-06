@@ -60,7 +60,15 @@ func ParseProjects(output string) []string {
 	seen := map[string]struct{}{}
 	projects := []string{}
 	for scanner.Scan() {
-		project := strings.TrimSpace(scanner.Text())
+		line := strings.TrimSpace(scanner.Text())
+		if line == "" {
+			continue
+		}
+		fields := strings.Fields(line)
+		if len(fields) == 0 {
+			continue
+		}
+		project := strings.Trim(strings.TrimSpace(fields[0]), "/")
 		if project == "" {
 			continue
 		}

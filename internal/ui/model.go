@@ -140,6 +140,8 @@ type Model struct {
 	gerritCursor        int
 	gerritScroll        int
 	gerritChecked       map[string]struct{}
+	gerritSearching     bool
+	gerritSearchQuery   string
 	repoMeta            map[string]gitutil.RepoMetadata
 	settings            store.Settings
 }
@@ -434,6 +436,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.gerritCursor = 0
 		m.gerritScroll = 0
 		m.gerritChecked = map[string]struct{}{}
+		m.gerritSearching = false
+		m.gerritSearchQuery = ""
 		m.status = fmt.Sprintf("Gerrit projects loaded: %d", len(msg.projects))
 		m.logInfo(fmt.Sprintf("gerrit: loaded %d projects", len(msg.projects)))
 		return m, nil
@@ -1595,7 +1599,10 @@ func (m Model) settingsDialogView(width int, rows int) string {
 
 func (m Model) gerritDialogView(width int, rows int) string {
 	checkedCount := len(m.gerritChecked)
-	header := fmt.Sprintf("Space=toggle  Enter=track checked  a=all  A=none  j/k move  PgUp/PgDn scroll  Esc=close  checked=%d total=%d", checkedCount, len(m.gerritProjects))
+	header := fmt.Sprintf("Space=toggle  /=search  Enter=track checked  a=all  A=none  j/k move  PgUp/PgDn scroll  Esc=close  checked=%d total=%d", checkedCount, len(m.gerritProjects))
+	if m.gerritSearching {
+		header = "Search Gerrit projects: type to filter, Enter/Esc leave search"
+	}
 	lines := []string{
 		m.fgStyle(m.theme.Muted).Render(trimRight(header, width)),
 		"",
@@ -1610,10 +1617,23 @@ func (m Model) gerritDialogView(width int, rows int) string {
 		return strings.Join(limitLines(lines, rows), "\n")
 	}
 
+	filtered := m.visibleGerritProjects()
+	if m.gerritSearching || m.gerritSearchQuery != "" {
+		lines = append(lines, m.fgStyle(m.theme.Input).Render(trimRight("/"+m.textInput.View(), width)))
+		lines = append(lines, "")
+	}
+	if len(filtered) == 0 {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight("(no matching Gerrit projects)", width)))
+		return strings.Join(limitLines(lines, rows), "\n")
+	}
+
 	visibleRows := max(1, rows-3)
-	start, end := repoViewportRange(makeSequentialIndexes(len(m.gerritProjects)), m.gerritScroll, visibleRows)
+	if m.gerritSearching || m.gerritSearchQuery != "" {
+		visibleRows = max(1, rows-5)
+	}
+	start, end := repoViewportRange(makeSequentialIndexes(len(filtered)), m.gerritScroll, visibleRows)
 	for i := start; i < end; i++ {
-		project := m.gerritProjects[i]
+		project := filtered[i]
 		marker := "  "
 		style := m.fgStyle(m.theme.Foreground)
 		if i == m.gerritCursor {
@@ -1627,7 +1647,7 @@ func (m Model) gerritDialogView(width int, rows int) string {
 		lines = append(lines, style.Render(trimRight(marker+box+" "+project, width)))
 	}
 
-	indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(m.gerritProjects))
+	indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(filtered))
 	lines = append(lines, "", m.fgStyle(m.theme.Muted).Render(trimRight(indicator, width)))
 	return strings.Join(limitLines(lines, rows), "\n")
 }
@@ -1970,12 +1990,36 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleGerritDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.gerritSearching {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "enter", "esc":
+			m.gerritSearching = false
+			m.textInput.Blur()
+			m.status = fmt.Sprintf("Filtered Gerrit projects: %s", m.gerritSearchQuery)
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		m.gerritSearchQuery = strings.TrimSpace(m.textInput.Value())
+		m.normalizeGerritCursor()
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc", "g":
 		m.gerritDialog = false
+		m.gerritSearching = false
+		m.textInput.Blur()
 		m.status = "Closed Gerrit projects"
+	case "/":
+		m.gerritSearching = true
+		m.textInput.SetValue(m.gerritSearchQuery)
+		m.textInput.Focus()
+		m.status = "Search Gerrit projects"
 	case "up", "k":
 		m.moveGerritCursor(-1)
 	case "down", "j":
@@ -2047,8 +2091,38 @@ func boolSettingValue(value bool) string {
 	return "[ ]"
 }
 
+func (m Model) visibleGerritProjects() []string {
+	if m.gerritSearchQuery == "" {
+		return m.gerritProjects
+	}
+	filtered := make([]string, 0, len(m.gerritProjects))
+	for _, project := range m.gerritProjects {
+		if containsFold(project, m.gerritSearchQuery) {
+			filtered = append(filtered, project)
+		}
+	}
+	return filtered
+}
+
+func (m *Model) normalizeGerritCursor() {
+	filtered := m.visibleGerritProjects()
+	if len(filtered) == 0 {
+		m.gerritCursor = 0
+		m.gerritScroll = 0
+		return
+	}
+	if m.gerritCursor < 0 {
+		m.gerritCursor = 0
+	}
+	if m.gerritCursor >= len(filtered) {
+		m.gerritCursor = len(filtered) - 1
+	}
+	m.ensureGerritCursorVisible()
+}
+
 func (m *Model) moveGerritCursor(delta int) {
-	if len(m.gerritProjects) == 0 {
+	filtered := m.visibleGerritProjects()
+	if len(filtered) == 0 {
 		m.gerritCursor = 0
 		m.gerritScroll = 0
 		return
@@ -2057,16 +2131,22 @@ func (m *Model) moveGerritCursor(delta int) {
 	if m.gerritCursor < 0 {
 		m.gerritCursor = 0
 	}
-	if m.gerritCursor >= len(m.gerritProjects) {
-		m.gerritCursor = len(m.gerritProjects) - 1
+	if m.gerritCursor >= len(filtered) {
+		m.gerritCursor = len(filtered) - 1
 	}
 	m.ensureGerritCursorVisible()
 }
 
 func (m *Model) ensureGerritCursorVisible() {
+	filtered := m.visibleGerritProjects()
 	rows := m.gerritDialogRows()
 	if rows <= 0 {
 		rows = 1
+	}
+	if len(filtered) == 0 {
+		m.gerritCursor = 0
+		m.gerritScroll = 0
+		return
 	}
 	if m.gerritScroll < 0 {
 		m.gerritScroll = 0
@@ -2077,7 +2157,7 @@ func (m *Model) ensureGerritCursorVisible() {
 	if m.gerritCursor >= m.gerritScroll+rows {
 		m.gerritScroll = m.gerritCursor - rows + 1
 	}
-	maxScroll := max(0, len(m.gerritProjects)-rows)
+	maxScroll := max(0, len(filtered)-rows)
 	if m.gerritScroll > maxScroll {
 		m.gerritScroll = maxScroll
 	}
@@ -2090,10 +2170,11 @@ func (m Model) gerritDialogRows() int {
 }
 
 func (m *Model) toggleHighlightedGerritProject() {
-	if m.gerritCursor < 0 || m.gerritCursor >= len(m.gerritProjects) {
+	filtered := m.visibleGerritProjects()
+	if m.gerritCursor < 0 || m.gerritCursor >= len(filtered) {
 		return
 	}
-	project := m.gerritProjects[m.gerritCursor]
+	project := filtered[m.gerritCursor]
 	if m.gerritChecked == nil {
 		m.gerritChecked = map[string]struct{}{}
 	}
@@ -2110,10 +2191,10 @@ func (m *Model) selectAllGerritProjects() {
 	if m.gerritChecked == nil {
 		m.gerritChecked = map[string]struct{}{}
 	}
-	for _, project := range m.gerritProjects {
+	for _, project := range m.visibleGerritProjects() {
 		m.gerritChecked[project] = struct{}{}
 	}
-	m.status = fmt.Sprintf("Selected all %d Gerrit projects", len(m.gerritProjects))
+	m.status = fmt.Sprintf("Selected all %d visible Gerrit projects", len(m.visibleGerritProjects()))
 }
 
 func (m *Model) trackCheckedGerritProjects() int {
@@ -2745,10 +2826,14 @@ func (m *Model) trackGerritProject(project string) bool {
 		return false
 	}
 	cfg := m.gerritConfig()
+	baseDir := cfg.BaseDir
+	if expandedBaseDir, err := expandPath(baseDir); err == nil {
+		baseDir = expandedBaseDir
+	}
 	path := ""
 	remoteURL := ""
-	if strings.TrimSpace(cfg.BaseDir) != "" {
-		path = gerrit.LocalPath(cfg.BaseDir, project)
+	if strings.TrimSpace(baseDir) != "" {
+		path = gerrit.LocalPath(baseDir, project)
 	}
 	if strings.TrimSpace(cfg.Target()) != "" {
 		remoteURL = gerrit.BuildCloneURL(cfg.Target(), project)
@@ -2756,12 +2841,10 @@ func (m *Model) trackGerritProject(project string) bool {
 
 	for i := range m.repos {
 		if m.repos[i].GerritProject == project {
-			if m.repos[i].Path == "" {
+			if m.repos[i].Path == "" || !gitutil.IsGitRepo(m.repos[i].Path) {
 				m.repos[i].Path = path
 			}
-			if m.repos[i].RemoteURL == "" {
-				m.repos[i].RemoteURL = remoteURL
-			}
+			m.repos[i].RemoteURL = remoteURL
 			if m.repos[i].Name == "" {
 				m.repos[i].Name = filepath.Base(project)
 			}

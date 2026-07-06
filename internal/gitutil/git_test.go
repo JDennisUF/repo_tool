@@ -26,6 +26,18 @@ func TestInspectStatusCurrent(t *testing.T) {
 	}
 }
 
+func TestIsGitRepoSubdirectoryIsFalse(t *testing.T) {
+	repo := initTestRepo(t)
+	subdir := filepath.Join(repo, "nested", "path")
+	if err := os.MkdirAll(subdir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", subdir, err)
+	}
+
+	if IsGitRepo(subdir) {
+		t.Fatalf("expected subdirectory %s to not count as repo root", subdir)
+	}
+}
+
 func TestInspectStatusUncommittedChanges(t *testing.T) {
 	repo := initTestRepo(t)
 	writeFile(t, filepath.Join(repo, "tracked.txt"), "hello\n")
@@ -162,11 +174,75 @@ func TestClone(t *testing.T) {
 	}
 }
 
+func TestCloneChecksOutDevelopWhenRemoteBranchExists(t *testing.T) {
+	remote := seededRemoteWithBranches(t, "develop")
+
+	target := filepath.Join(t.TempDir(), "clone")
+	if _, err := Clone(remote, target); err != nil {
+		t.Fatalf("clone failed: %v", err)
+	}
+	if got := currentBranch(target); got != "develop" {
+		t.Fatalf("current branch = %q, want %q", got, "develop")
+	}
+}
+
+func TestCloneChecksOutDraftWhenDevelopMissing(t *testing.T) {
+	remote := seededRemoteWithBranches(t, "draft")
+
+	target := filepath.Join(t.TempDir(), "clone")
+	if _, err := Clone(remote, target); err != nil {
+		t.Fatalf("clone failed: %v", err)
+	}
+	if got := currentBranch(target); got != "draft" {
+		t.Fatalf("current branch = %q, want %q", got, "draft")
+	}
+}
+
+func TestCloneKeepsDefaultBranchWhenNoPreferredBranchExists(t *testing.T) {
+	remote := seededRemoteWithBranches(t)
+
+	target := filepath.Join(t.TempDir(), "clone")
+	if _, err := Clone(remote, target); err != nil {
+		t.Fatalf("clone failed: %v", err)
+	}
+	if got := currentBranch(target); got != "main" {
+		t.Fatalf("current branch = %q, want %q", got, "main")
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()
 	runGit(t, repo, "init")
 	return repo
+}
+
+func seededRemoteWithBranches(t *testing.T, branches ...string) string {
+	t.Helper()
+
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+
+	seed := t.TempDir()
+	runGit(t, "", "init", seed)
+	writeFile(t, filepath.Join(seed, "tracked.txt"), "hello\n")
+	runGit(t, seed, "add", "tracked.txt")
+	runGit(t, seed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, "", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	for _, branch := range branches {
+		runGit(t, seed, "checkout", "-b", branch)
+		writeFile(t, filepath.Join(seed, branch+".txt"), branch+"\n")
+		runGit(t, seed, "add", branch+".txt")
+		runGit(t, seed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", branch)
+		runGit(t, seed, "push", "-u", "origin", branch)
+		runGit(t, seed, "checkout", "main")
+	}
+
+	return remote
 }
 
 func runGit(t *testing.T, repo string, args ...string) {
