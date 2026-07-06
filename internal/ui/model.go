@@ -1091,17 +1091,21 @@ func (m Model) buildReposContent(width int, rows int) string {
 	branchW += branchExtra
 	sep := m.bgStyle().Render(" ")
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight(
-			padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW)+" "+padCell("Age", ageW)+" "+padCell("Author", authorW)+" "+padCell("Op", opW),
+		padStyledCell(
+			m.fgStyle(m.theme.Muted).Render(trimRight(
+				padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW)+" "+padCell("Age", ageW)+" "+padCell("Author", authorW)+" "+padCell("Op", opW),
+				contentW,
+			)),
 			contentW,
-		)),
+			m.theme.Background,
+		),
 	}
 
 	visible := m.visibleRepoIndexes()
 	if len(m.repos) == 0 {
-		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add, s to scan, or g for Gerrit)"))
+		lines = append(lines, padStyledCell(m.fgStyle(m.theme.Muted).Render("(no repos; press o to add, s to scan, or g for Gerrit)"), contentW, m.theme.Background))
 	} else if len(visible) == 0 {
-		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no matching repos)"))
+		lines = append(lines, padStyledCell(m.fgStyle(m.theme.Muted).Render("(no matching repos)"), contentW, m.theme.Background))
 	} else {
 		availableRows := rows - len(lines)
 		if m.inputMode != inputNone {
@@ -1201,7 +1205,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 				authorStyle.Render(padCell(commitAuthor, authorW)),
 				opStyle.Render(padCell(trimRight(op, opW), opW)),
 			}, sep)
-			lines = append(lines, row)
+			lines = append(lines, padStyledCell(row, contentW, rowBg))
 		}
 	}
 
@@ -1213,7 +1217,11 @@ func (m Model) buildReposContent(width int, rows int) string {
 			prompt = "Search"
 		}
 		input := trimRight(prompt+": "+m.textInput.View(), contentW)
-		lines = append(lines, "", m.fgStyle(m.theme.Input).Render(input), m.fgStyle(m.theme.Muted).Render(trimRight("Enter=confirm Esc=cancel", contentW)))
+		lines = append(lines,
+			padStyledCell("", contentW, m.theme.Background),
+			padStyledCell(m.fgStyle(m.theme.Input).Render(input), contentW, m.theme.Background),
+			padStyledCell(m.fgStyle(m.theme.Muted).Render(trimRight("Enter=confirm Esc=cancel", contentW)), contentW, m.theme.Background),
+		)
 	}
 
 	return strings.Join(limitLines(lines, rows), "\n")
@@ -1222,7 +1230,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 func (m Model) buildRepoInfoContent(width int, rows int) string {
 	idx, ok := m.currentRepoIndex()
 	if !ok || width < 10 {
-		return m.fgStyle(m.theme.Muted).Render("(no repo selected)")
+		return padStyledCell(m.fgStyle(m.theme.Muted).Render("(no repo selected)"), width, m.theme.Background)
 	}
 
 	r := m.repos[idx]
