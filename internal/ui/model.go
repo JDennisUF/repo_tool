@@ -983,11 +983,8 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 
 	content := m.padBackground(m.indentBody(body, innerW), innerW, innerH)
 	lines := strings.Split(content, "\n")
-	contentStyle := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(m.theme.Foreground)).
-		Background(lipgloss.Color(m.theme.Background))
 	for i, line := range lines {
-		lines[i] = borderStyle.Render(border.Left) + contentStyle.Render(line) + borderStyle.Render(border.Right)
+		lines[i] = borderStyle.Render(border.Left) + line + borderStyle.Render(border.Right)
 	}
 
 	bottom := borderStyle.Render(border.BottomLeft + strings.Repeat(border.Bottom, innerW) + border.BottomRight)
@@ -1079,6 +1076,9 @@ func (m Model) buildReposContent(width int, rows int) string {
 	authorW := 16
 	nameW := 18
 	opW := 10
+	if !m.settings.ShowRepoInfo {
+		opW = 18
+	}
 	const separatorCount = 9
 	fixedW := 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
 	flexibleW := nameW + branchW + authorW + opW
@@ -1086,6 +1086,13 @@ func (m Model) buildReposContent(width int, rows int) string {
 	nameExtra := slack / 2
 	authorExtra := slack / 3
 	branchExtra := slack - nameExtra - authorExtra
+	if !m.settings.ShowRepoInfo {
+		opExtra := slack / 4
+		nameExtra = slack / 3
+		authorExtra = slack / 4
+		branchExtra = slack - nameExtra - authorExtra - opExtra
+		opW += opExtra
+	}
 	nameW += nameExtra
 	authorW += authorExtra
 	branchW += branchExtra
