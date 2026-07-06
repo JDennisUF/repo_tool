@@ -134,6 +134,9 @@ type Model struct {
 	favoritesDialog     bool
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
+	deleteConfirm       bool
+	deleteConfirmRepo   store.Repo
+	deleteConfirmLists  []string
 	gerritDialog        bool
 	gerritLoading       bool
 	gerritProjects      []string
@@ -488,6 +491,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.gerritDialog {
 			return m.handleGerritDialog(msg)
 		}
+		if m.deleteConfirm {
+			return m.handleDeleteConfirm(msg)
+		}
 		if m.favoritesDialog {
 			return m.handleFavoritesDialog(msg)
 		}
@@ -741,15 +747,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			if !ok {
 				return m, nil
 			}
-			removed := m.repos[idx]
-			m.repos = append(m.repos[:idx], m.repos[idx+1:]...)
-			m.removeRepoFromFavorites(m.repoKey(removed))
-			delete(m.repoMeta, m.repoKey(removed))
-			m.normalizeCursor()
-			m.ensureRepoCursorVisible(m.repoPanelContentRows())
-			m.persist()
-			m.status = fmt.Sprintf("Removed: %s", removed.Name)
-			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, fallbackValue(removed.Path, removed.GerritProject)))
+			repo := m.repos[idx]
+			lists := m.favoriteListsContaining(m.repoKey(repo))
+			if len(lists) > 0 {
+				m.deleteConfirm = true
+				m.deleteConfirmRepo = repo
+				m.deleteConfirmLists = lists
+				m.status = fmt.Sprintf("Confirm delete: %s", repo.Name)
+				return m, nil
+			}
+			m.removeTrackedRepo(repo)
 			return m, nil
 		case "z":
 			idx, ok := m.currentRepoIndex()
@@ -1330,6 +1337,9 @@ func (m Model) View() string {
 		if m.showHelp {
 			body = m.renderHelpOverlay(body)
 		}
+		if m.deleteConfirm {
+			body = m.renderDeleteConfirmDialog(body)
+		}
 		if m.gerritDialog {
 			body = m.renderGerritDialog(body)
 		}
@@ -1397,6 +1407,9 @@ func (m Model) View() string {
 	}
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
+	}
+	if m.deleteConfirm {
+		body = m.renderDeleteConfirmDialog(body)
 	}
 	if m.gerritDialog {
 		body = m.renderGerritDialog(body)
@@ -1590,6 +1603,31 @@ func (m Model) renderGerritDialog(base string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) renderDeleteConfirmDialog(base string) string {
+	_ = base
+	screenW := max(1, m.width)
+	screenH := max(1, m.height-2)
+	dialogW := min(max(44, screenW-8), 84)
+	dialogH := min(max(12, screenH-6), 22)
+	dialog := m.renderSection(-1, "Confirm Remove", m.deleteConfirmView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
+
+	top := max(0, (screenH-dialogH)/2)
+	left := max(0, (screenW-dialogW)/2)
+	dialogLines := strings.Split(dialog, "\n")
+	bg := m.bgStyle()
+	lines := make([]string, screenH)
+	for i := range lines {
+		if i < top || i >= top+len(dialogLines) {
+			lines[i] = bg.Render(strings.Repeat(" ", screenW))
+			continue
+		}
+		dialogLine := dialogLines[i-top]
+		right := max(0, screenW-left-lipgloss.Width(dialogLine))
+		lines[i] = bg.Render(strings.Repeat(" ", left)) + dialogLine + bg.Render(strings.Repeat(" ", right))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m Model) renderSettingsDialog(base string) string {
 	_ = base
 	screenW := max(1, m.width)
@@ -1712,6 +1750,26 @@ func (m Model) gerritDialogView(width int, rows int) string {
 
 	indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(filtered))
 	lines = append(lines, "", m.fgStyle(m.theme.Muted).Render(trimRight(indicator, width)))
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
+func (m Model) deleteConfirmView(width int, rows int) string {
+	lines := []string{
+		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=remove  Esc=cancel", width)),
+		"",
+		m.labelValue("Repo", m.deleteConfirmRepo.Name, width),
+		m.labelValue("Path", fallbackValue(m.deleteConfirmRepo.Path, "none"), width),
+		m.labelValue("Project", fallbackValue(m.deleteConfirmRepo.GerritProject, "none"), width),
+		"",
+		m.fgStyle(m.theme.Warning).Bold(true).Render(trimRight("This repo is in these favorites lists:", width)),
+	}
+	for _, name := range m.deleteConfirmLists {
+		lines = append(lines, m.labelValue("", name, width))
+	}
+	lines = append(lines,
+		"",
+		m.fgStyle(m.theme.Muted).Render(trimRight("Removing will stop tracking the repo and remove it from all favorites lists above.", width)),
+	)
 	return strings.Join(limitLines(lines, rows), "\n")
 }
 
@@ -2111,6 +2169,25 @@ func (m Model) handleGerritDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+func (m Model) handleDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc":
+		m.deleteConfirm = false
+		m.deleteConfirmRepo = store.Repo{}
+		m.deleteConfirmLists = nil
+		m.status = "Canceled repo removal"
+	case "enter":
+		repo := m.deleteConfirmRepo
+		m.deleteConfirm = false
+		m.deleteConfirmRepo = store.Repo{}
+		m.deleteConfirmLists = nil
+		m.removeTrackedRepo(repo)
+	}
+	return m, nil
+}
+
 func (m *Model) moveSettingsCursor(delta int) {
 	const settingsCount = 6
 	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
@@ -2447,6 +2524,35 @@ func (m *Model) removeRepoFromFavorites(path string) {
 	for _, set := range m.favoriteLists {
 		delete(set, path)
 	}
+}
+
+func (m Model) favoriteListsContaining(path string) []string {
+	names := make([]string, 0, len(m.favoriteLists))
+	for name, set := range m.favoriteLists {
+		if _, ok := set[path]; ok {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
+func (m *Model) removeTrackedRepo(repo store.Repo) {
+	key := m.repoKey(repo)
+	for i := range m.repos {
+		if m.repoKey(m.repos[i]) != key {
+			continue
+		}
+		m.repos = append(m.repos[:i], m.repos[i+1:]...)
+		break
+	}
+	m.removeRepoFromFavorites(key)
+	delete(m.repoMeta, key)
+	m.normalizeCursor()
+	m.ensureRepoCursorVisible(m.repoPanelContentRows())
+	m.persist()
+	m.status = fmt.Sprintf("Removed: %s", repo.Name)
+	m.logInfo(fmt.Sprintf("removed: %s (%s)", repo.Name, fallbackValue(repo.Path, repo.GerritProject)))
 }
 
 func (m Model) visibleRepoIndexes() []int {
