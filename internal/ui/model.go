@@ -1937,7 +1937,9 @@ func (m Model) labelValue(label string, value string, width int) string {
 	if label == "" {
 		prefix = "  "
 	}
-	return labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, max(1, width-len(prefix))))
+	availableWidth := max(1, width-lipgloss.Width(prefix))
+	line := labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, availableWidth))
+	return padStyledCell(line, width, m.theme.Background)
 }
 
 func (m *Model) openThemeSelector() {
