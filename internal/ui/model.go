@@ -16,6 +16,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 	"github.com/muesli/reflow/truncate"
 	"repo_tool/internal/discovery"
+	"repo_tool/internal/gerrit"
 	"repo_tool/internal/gitutil"
 	"repo_tool/internal/store"
 )
@@ -62,6 +63,16 @@ type fetchFinishedMsg struct {
 	results []pullResult
 }
 
+type cloneFinishedMsg struct {
+	results []pullResult
+}
+
+type gerritProjectsLoadedMsg struct {
+	projects []string
+	output   string
+	err      error
+}
+
 type lazygitExitedMsg struct {
 	err  error
 	path string
@@ -82,18 +93,19 @@ type outputLine struct {
 }
 
 type Model struct {
-	repos      []store.Repo
-	cursor     int
-	repoScroll int
-	width      int
-	height     int
-	status     string
-	busy       bool
-	showHelp   bool
-	focus      focusSection
-	settingsDialog bool
-	settingsCursor int
-	settingsDraft  store.Settings
+	repos           []store.Repo
+	cursor          int
+	repoScroll      int
+	width           int
+	height          int
+	status          string
+	busy            bool
+	showHelp        bool
+	focus           focusSection
+	settingsDialog  bool
+	settingsCursor  int
+	settingsDraft   store.Settings
+	settingsEditing bool
 	outputMaximized bool
 
 	// output panel
@@ -122,6 +134,12 @@ type Model struct {
 	favoritesDialog     bool
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
+	gerritDialog        bool
+	gerritLoading       bool
+	gerritProjects      []string
+	gerritCursor        int
+	gerritScroll        int
+	gerritChecked       map[string]struct{}
 	repoMeta            map[string]gitutil.RepoMetadata
 	settings            store.Settings
 }
@@ -325,7 +343,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		failures := 0
 		for i := range m.repos {
 			for _, r := range msg.results {
-				if m.repos[i].Path != r.path {
+				if m.repoKey(m.repos[i]) != r.path {
 					continue
 				}
 				if r.err != nil {
@@ -354,7 +372,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		failures := 0
 		for i := range m.repos {
 			for _, r := range msg.results {
-				if m.repos[i].Path != r.path {
+				if m.repoKey(m.repos[i]) != r.path {
 					continue
 				}
 				if r.err != nil {
@@ -373,9 +391,61 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.scrollToBottom(m.outPanelHeight())
 		return m, nil
 
+	case cloneFinishedMsg:
+		m.busy = false
+		successes := 0
+		failures := 0
+		for i := range m.repos {
+			for _, r := range msg.results {
+				if m.repoKey(m.repos[i]) != r.path {
+					continue
+				}
+				if r.err != nil {
+					m.repos[i].LastOp = "clone failed"
+					failures++
+					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
+				} else {
+					m.repos[i].LastOp = "clone ok"
+					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
+					successes++
+					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
+					m.refreshRepoStatus(m.repos[i])
+				}
+			}
+		}
+		m.persist()
+		summary := fmt.Sprintf("Clone complete: %d ok, %d failed", successes, failures)
+		m.status = summary
+		m.logInfo("--- " + summary + " ---")
+		m.scrollToBottom(m.outPanelHeight())
+		return m, nil
+
+	case gerritProjectsLoadedMsg:
+		m.busy = false
+		m.gerritLoading = false
+		if msg.err != nil {
+			m.gerritDialog = false
+			m.status = fmt.Sprintf("Gerrit project load failed: %v", msg.err)
+			m.logError("gerrit: " + msg.output)
+			return m, nil
+		}
+		m.gerritDialog = true
+		m.gerritProjects = msg.projects
+		m.gerritCursor = 0
+		m.gerritScroll = 0
+		m.gerritChecked = map[string]struct{}{}
+		m.status = fmt.Sprintf("Gerrit projects loaded: %d", len(msg.projects))
+		m.logInfo(fmt.Sprintf("gerrit: loaded %d projects", len(msg.projects)))
+		return m, nil
+
 	case lazygitExitedMsg:
 		if msg.path != "" {
-			m.refreshRepoStatus(msg.path)
+			for _, repo := range m.repos {
+				if m.repoKey(repo) == msg.path {
+					m.refreshRepoStatus(repo)
+					break
+				}
+			}
 		}
 		if msg.err != nil {
 			m.status = fmt.Sprintf("lazygit failed: %v", msg.err)
@@ -402,6 +472,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if m.inputMode == inputSearch {
 			return m.handleInputMode(msg)
+		}
+		if m.gerritDialog {
+			return m.handleGerritDialog(msg)
 		}
 		if m.favoritesDialog {
 			return m.handleFavoritesDialog(msg)
@@ -481,7 +554,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "F":
 			if idx, ok := m.currentRepoIndex(); ok {
 				repo := m.repos[idx]
-				if m.toggleFavorite(repo.Path) {
+				if m.toggleFavorite(m.repoKey(repo)) {
 					m.status = fmt.Sprintf("Favorited %s in %s", repo.Name, m.activeFavoriteList)
 					m.logInfo(fmt.Sprintf("favorite added: %s -> %s", repo.Name, m.activeFavoriteList))
 				} else {
@@ -495,9 +568,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "r":
 			if idx, ok := m.currentRepoIndex(); ok {
 				repo := m.repos[idx]
-				m.refreshRepoStatus(repo.Path)
+				m.refreshRepoStatus(repo)
 				m.status = fmt.Sprintf("Refreshed repo status: %s", repo.Name)
-				m.logInfo(fmt.Sprintf("refresh: %s (%s)", repo.Name, repo.Path))
+				m.logInfo(fmt.Sprintf("refresh: %s (%s)", repo.Name, fallbackValue(repo.Path, repo.GerritProject)))
 			}
 		case "R":
 			m.refreshRepoStatuses()
@@ -526,13 +599,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Busy running fetch"
 				return m, nil
 			}
-			targets := selectedRepos(m.repos)
+			targets := selectableRepos(selectedRepos(m.repos))
 			scope := "selected repositories"
 			if len(targets) == 0 {
 				idx, ok := m.currentRepoIndex()
 				if !ok {
 					m.status = "No repository highlighted"
 					m.logInfo("Fetch: no repository highlighted")
+					return m, nil
+				}
+				if !m.hasLocalRepo(m.repos[idx]) {
+					m.status = fmt.Sprintf("Repository not cloned: %s", m.repos[idx].Name)
 					return m, nil
 				}
 				targets = []store.Repo{m.repos[idx]}
@@ -543,8 +620,53 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logFetchStart(scope, targets)
 			m.scrollToBottom(m.outPanelHeight())
 			return m, fetchSelectedCmd(targets)
+		case "c":
+			if m.busy {
+				m.status = "Busy running clone"
+				return m, nil
+			}
+			targets := cloneableRepos(selectedRepos(m.repos))
+			scope := "selected repositories"
+			if len(targets) == 0 {
+				idx, ok := m.currentRepoIndex()
+				if !ok {
+					m.status = "No repository highlighted"
+					m.logInfo("Clone: no repository highlighted")
+					return m, nil
+				}
+				target := m.repos[idx]
+				if !m.isCloneableRepo(target) {
+					m.status = fmt.Sprintf("Repository not cloneable: %s", target.Name)
+					return m, nil
+				}
+				targets = []store.Repo{target}
+				scope = "highlighted repository"
+			}
+			m.busy = true
+			m.status = fmt.Sprintf("Cloning %d repositories...", len(targets))
+			m.logCloneStart(scope, targets)
+			m.scrollToBottom(m.outPanelHeight())
+			return m, cloneSelectedCmd(targets)
 		case "T":
 			m.openThemeSelector()
+		case "g":
+			if m.busy {
+				m.status = "Busy loading Gerrit projects"
+				return m, nil
+			}
+			cfg := m.gerritConfig()
+			if err := cfg.ValidateForClone(); err != nil {
+				m.status = fmt.Sprintf("Gerrit settings incomplete: %v", err)
+				return m, nil
+			}
+			m.busy = true
+			m.gerritLoading = true
+			m.status = "Loading Gerrit projects..."
+			m.logInfo("gerrit: loading projects from " + cfg.Target())
+			if m.settings.ShowGitCommands {
+				m.logInfo("  $ " + gerrit.ListProjectsCommand(cfg.Target()))
+			}
+			return m, loadGerritProjectsCmd(cfg)
 		case "l":
 			m.openFavoritesDialog()
 		case "S", ",":
@@ -568,13 +690,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				m.status = "Busy running pull"
 				return m, nil
 			}
-			selected := selectedRepos(m.repos)
+			selected := selectableRepos(selectedRepos(m.repos))
 			scope := "selected repositories"
 			if len(selected) == 0 {
 				idx, ok := m.currentRepoIndex()
 				if !ok {
 					m.status = "No repository highlighted"
 					m.logInfo("Pull: no repository highlighted")
+					return m, nil
+				}
+				if !m.hasLocalRepo(m.repos[idx]) {
+					m.status = fmt.Sprintf("Repository not cloned: %s", m.repos[idx].Name)
 					return m, nil
 				}
 				selected = []store.Repo{m.repos[idx]}
@@ -592,13 +718,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			removed := m.repos[idx]
 			m.repos = append(m.repos[:idx], m.repos[idx+1:]...)
-			m.removeRepoFromFavorites(removed.Path)
-			delete(m.repoMeta, removed.Path)
+			m.removeRepoFromFavorites(m.repoKey(removed))
+			delete(m.repoMeta, m.repoKey(removed))
 			m.normalizeCursor()
 			m.ensureRepoCursorVisible(m.repoPanelContentRows())
 			m.persist()
 			m.status = fmt.Sprintf("Removed: %s", removed.Name)
-			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, removed.Path))
+			m.logInfo(fmt.Sprintf("removed: %s (%s)", removed.Name, fallbackValue(removed.Path, removed.GerritProject)))
 			return m, nil
 		case "z":
 			idx, ok := m.currentRepoIndex()
@@ -607,6 +733,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			repo := m.repos[idx]
+			if !m.hasLocalRepo(repo) {
+				m.status = fmt.Sprintf("Repository not cloned: %s", repo.Name)
+				return m, nil
+			}
 			cmd := exec.Command("lazygit")
 			cmd.Dir = repo.Path
 			cmd.Stdin = os.Stdin
@@ -616,7 +746,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.logInfo(fmt.Sprintf("lazygit: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
-				return lazygitExitedMsg{err: err, path: repo.Path}
+				return lazygitExitedMsg{err: err, path: m.repoKey(repo)}
 			})
 		case "v":
 			idx, ok := m.currentRepoIndex()
@@ -625,6 +755,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			repo := m.repos[idx]
+			if !m.hasLocalRepo(repo) {
+				m.status = fmt.Sprintf("Repository not cloned: %s", repo.Name)
+				return m, nil
+			}
 			m.status = fmt.Sprintf("Opening VS Code: %s", repo.Name)
 			m.logInfo(fmt.Sprintf("code: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
@@ -636,6 +770,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			repo := m.repos[idx]
+			if !m.hasLocalRepo(repo) {
+				m.status = fmt.Sprintf("Repository not cloned: %s", repo.Name)
+				return m, nil
+			}
 			m.status = fmt.Sprintf("Opening Zed: %s", repo.Name)
 			m.logInfo(fmt.Sprintf("zed: opening %s (%s)", repo.Name, repo.Path))
 			m.scrollToBottom(m.outPanelHeight())
@@ -707,10 +845,12 @@ func (m Model) repoMatchesSearch(repo store.Repo) bool {
 	if m.repoSearchQuery == "" {
 		return true
 	}
-	meta := m.repoMetadata(repo.Path)
+	meta := m.repoMetadata(repo)
 	haystack := strings.Join([]string{
 		repo.Name,
 		repo.Path,
+		repo.GerritProject,
+		repo.RemoteURL,
 		meta.CurrentBranch,
 		repo.LastOp,
 	}, " ")
@@ -836,8 +976,12 @@ func (m *Model) refreshRepoStatuses() {
 	}
 	valid := make(map[string]struct{}, len(m.repos))
 	for _, repo := range m.repos {
-		valid[repo.Path] = struct{}{}
-		m.repoMeta[repo.Path] = gitutil.InspectRepoMetadata(repo.Path)
+		key := m.repoKey(repo)
+		if key == "" {
+			continue
+		}
+		valid[key] = struct{}{}
+		m.repoMeta[key] = m.inspectRepo(repo)
 	}
 	for path := range m.repoMeta {
 		if _, ok := valid[path]; !ok {
@@ -846,25 +990,44 @@ func (m *Model) refreshRepoStatuses() {
 	}
 }
 
-func (m *Model) refreshRepoStatus(path string) {
+func (m *Model) refreshRepoStatus(repo store.Repo) {
 	if m.repoMeta == nil {
 		m.repoMeta = map[string]gitutil.RepoMetadata{}
 	}
-	m.repoMeta[path] = gitutil.InspectRepoMetadata(path)
+	key := m.repoKey(repo)
+	if key == "" {
+		return
+	}
+	m.repoMeta[key] = m.inspectRepo(repo)
 }
 
-func (m Model) repoStatus(path string) gitutil.RepoStatus {
-	if meta, ok := m.repoMeta[path]; ok {
+func (m Model) repoStatus(repo store.Repo) gitutil.RepoStatus {
+	if meta, ok := m.repoMeta[m.repoKey(repo)]; ok {
 		return meta.Status
 	}
 	return gitutil.StatusNotCloned
 }
 
-func (m Model) repoMetadata(path string) gitutil.RepoMetadata {
-	if meta, ok := m.repoMeta[path]; ok {
+func (m Model) repoMetadata(repo store.Repo) gitutil.RepoMetadata {
+	if meta, ok := m.repoMeta[m.repoKey(repo)]; ok {
 		return meta
 	}
 	return gitutil.RepoMetadata{Status: gitutil.StatusNotCloned}
+}
+
+func (m Model) repoKey(repo store.Repo) string {
+	return store.RepoKey(repo)
+}
+
+func (m Model) inspectRepo(repo store.Repo) gitutil.RepoMetadata {
+	if strings.TrimSpace(repo.Path) == "" {
+		return gitutil.RepoMetadata{Status: gitutil.StatusNotCloned}
+	}
+	return gitutil.InspectRepoMetadata(repo.Path)
+}
+
+func (m Model) hasLocalRepo(repo store.Repo) bool {
+	return m.repoStatus(repo) != gitutil.StatusNotCloned
 }
 
 func (m Model) buildReposContent(width int, rows int) string {
@@ -892,7 +1055,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 
 	visible := m.visibleRepoIndexes()
 	if len(m.repos) == 0 {
-		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add or s to scan)"))
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no repos; press o to add, s to scan, or g for Gerrit)"))
 	} else if len(visible) == 0 {
 		lines = append(lines, m.fgStyle(m.theme.Muted).Render("(no matching repos)"))
 	} else {
@@ -906,7 +1069,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 		start, end := repoViewportRange(visible, m.repoScroll, availableRows)
 		for _, idx := range visible[start:end] {
 			repo := m.repos[idx]
-			meta := m.repoMetadata(repo.Path)
+			meta := m.repoMetadata(repo)
 			status := meta.Status
 			focused := idx == m.cursor && m.focus == focusRepos
 			rowBg := m.theme.Background
@@ -929,7 +1092,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 
 			favStyle := m.fgBgStyle(m.theme.Muted, rowBg)
 			fav := " "
-			if m.isFavorite(repo.Path) {
+			if m.isFavorite(m.repoKey(repo)) {
 				favStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 				fav = "*"
 			}
@@ -1019,13 +1182,13 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 	}
 
 	r := m.repos[idx]
-	meta := m.repoMetadata(r.Path)
+	meta := m.repoMetadata(r)
 	lastOp := r.LastOp
 	if lastOp == "" {
 		lastOp = "none"
 	}
 	favorite := "no"
-	if m.isFavorite(r.Path) {
+	if m.isFavorite(m.repoKey(r)) {
 		favorite = "yes"
 	}
 	status := meta.Status
@@ -1036,6 +1199,8 @@ func (m Model) buildRepoInfoContent(width int, rows int) string {
 	lastUpdated := formatLastUpdated(r.LastUpdated)
 	lines := []string{
 		m.labelValue("Name", r.Name, width),
+		m.labelValue("Project", fallbackValue(r.GerritProject, "none"), width),
+		m.labelValue("Remote", fallbackValue(r.RemoteURL, "none"), width),
 		m.labelValue("Path", r.Path, width),
 		m.labelValue("Branch", currentBranch, width),
 		m.labelValue("Status", status.Description(), width),
@@ -1098,6 +1263,9 @@ func (m Model) View() string {
 		if m.showHelp {
 			body = m.renderHelpOverlay(body)
 		}
+		if m.gerritDialog {
+			body = m.renderGerritDialog(body)
+		}
 		if m.favoritesDialog {
 			body = m.renderFavoritesDialog(body)
 		}
@@ -1116,7 +1284,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -1163,6 +1331,9 @@ func (m Model) View() string {
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
 	}
+	if m.gerritDialog {
+		body = m.renderGerritDialog(body)
+	}
 	if m.favoritesDialog {
 		body = m.renderFavoritesDialog(body)
 	}
@@ -1180,9 +1351,9 @@ func (m Model) View() string {
 		Background(lipgloss.Color(m.theme.Status)).
 		Width(max(1, m.width)).
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
-		keys := m.fgStyle(m.theme.Muted).
+	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1327,6 +1498,31 @@ func (m Model) renderFavoritesDialog(base string) string {
 	return strings.Join(lines, "\n")
 }
 
+func (m Model) renderGerritDialog(base string) string {
+	_ = base
+	screenW := max(1, m.width)
+	screenH := max(1, m.height-2)
+	dialogW := min(max(60, screenW-4), max(60, screenW))
+	dialogH := min(max(18, screenH-2), max(18, screenH))
+	dialog := m.renderSection(9, "Gerrit Projects", m.gerritDialogView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
+
+	top := max(0, (screenH-dialogH)/2)
+	left := max(0, (screenW-dialogW)/2)
+	dialogLines := strings.Split(dialog, "\n")
+	bg := m.bgStyle()
+	lines := make([]string, screenH)
+	for i := range lines {
+		if i < top || i >= top+len(dialogLines) {
+			lines[i] = bg.Render(strings.Repeat(" ", screenW))
+			continue
+		}
+		dialogLine := dialogLines[i-top]
+		right := max(0, screenW-left-lipgloss.Width(dialogLine))
+		lines[i] = bg.Render(strings.Repeat(" ", left)) + dialogLine + bg.Render(strings.Repeat(" ", right))
+	}
+	return strings.Join(lines, "\n")
+}
+
 func (m Model) renderSettingsDialog(base string) string {
 	_ = base
 	screenW := max(1, m.width)
@@ -1353,32 +1549,86 @@ func (m Model) renderSettingsDialog(base string) string {
 }
 
 func (m Model) settingsDialogView(width int, rows int) string {
+	help := "Space=toggle  Enter=edit/toggle  s=save  Esc=cancel"
+	if m.settingsEditing {
+		help = "Enter=apply  Esc=cancel field"
+	}
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight("Space=toggle  Enter=save  Esc=cancel", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight(help, width)),
 		"",
 	}
 
 	items := []struct {
-		label string
-		value bool
+		label  string
+		value  string
+		isBool bool
 	}{
-		{label: "Show Git Commands", value: m.settingsDraft.ShowGitCommands},
-		{label: "Show Repo Info", value: m.settingsDraft.ShowRepoInfo},
+		{label: "Show Git Commands", value: boolSettingValue(m.settingsDraft.ShowGitCommands), isBool: true},
+		{label: "Show Repo Info", value: boolSettingValue(m.settingsDraft.ShowRepoInfo), isBool: true},
+		{label: "Gerrit Username", value: fallbackValue(m.settingsDraft.GerritUsername, "(unset)")},
+		{label: "Gerrit Server", value: fallbackValue(m.settingsDraft.GerritServer, "(unset)")},
+		{label: "Base Git Directory", value: fallbackValue(m.settingsDraft.BaseGitDir, "(unset)")},
+		{label: "Save Settings", value: "press Enter"},
 	}
 	for i, item := range items {
-		value := "[ ]"
 		style := m.fgStyle(m.theme.Foreground)
 		marker := "  "
-		if item.value {
-			value = "[x]"
-		}
 		if m.settingsCursor == i {
 			marker = "> "
 			style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
 		}
-		lines = append(lines, style.Render(trimRight(marker+value+" "+item.label, width)))
+		row := fmt.Sprintf("%s%s: %s", marker, item.label, item.value)
+		if item.isBool {
+			row = fmt.Sprintf("%s%s %s", marker, item.value, item.label)
+		}
+		lines = append(lines, style.Render(trimRight(row, width)))
+	}
+	if m.settingsEditing {
+		lines = append(lines,
+			"",
+			m.fgStyle(m.theme.Input).Render(trimRight("Value: "+m.textInput.View(), width)),
+		)
 	}
 
+	return strings.Join(limitLines(lines, rows), "\n")
+}
+
+func (m Model) gerritDialogView(width int, rows int) string {
+	checkedCount := len(m.gerritChecked)
+	header := fmt.Sprintf("Space=toggle  Enter=track checked  a=all  A=none  j/k move  PgUp/PgDn scroll  Esc=close  checked=%d total=%d", checkedCount, len(m.gerritProjects))
+	lines := []string{
+		m.fgStyle(m.theme.Muted).Render(trimRight(header, width)),
+		"",
+	}
+
+	if m.gerritLoading {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight("(loading projects...)", width)))
+		return strings.Join(limitLines(lines, rows), "\n")
+	}
+	if len(m.gerritProjects) == 0 {
+		lines = append(lines, m.fgStyle(m.theme.Muted).Render(trimRight("(no Gerrit projects loaded)", width)))
+		return strings.Join(limitLines(lines, rows), "\n")
+	}
+
+	visibleRows := max(1, rows-3)
+	start, end := repoViewportRange(makeSequentialIndexes(len(m.gerritProjects)), m.gerritScroll, visibleRows)
+	for i := start; i < end; i++ {
+		project := m.gerritProjects[i]
+		marker := "  "
+		style := m.fgStyle(m.theme.Foreground)
+		if i == m.gerritCursor {
+			marker = "> "
+			style = style.Foreground(lipgloss.Color(m.theme.Accent)).Bold(true)
+		}
+		box := "[ ]"
+		if _, ok := m.gerritChecked[project]; ok {
+			box = "[x]"
+		}
+		lines = append(lines, style.Render(trimRight(marker+box+" "+project, width)))
+	}
+
+	indicator := fmt.Sprintf("[%d-%d / %d]", start+1, end, len(m.gerritProjects))
+	lines = append(lines, "", m.fgStyle(m.theme.Muted).Render(trimRight(indicator, width)))
 	return strings.Join(limitLines(lines, rows), "\n")
 }
 
@@ -1456,6 +1706,8 @@ func (m Model) helpView(width int) string {
 		"  A               Clear all",
 		"",
 		"Repo Actions",
+		"  c               Clone tracked Gerrit repo(s)",
+		"  g               Load Gerrit projects",
 		"  h               Fetch",
 		"  o               Add repo",
 		"  s               Scan repos",
@@ -1475,8 +1727,9 @@ func (m Model) helpView(width int) string {
 		"",
 		"Settings",
 		"  j | k           Move Down | Up",
-		"  space           Toggle",
-		"  Enter           Save",
+		"  space           Toggle bool",
+		"  Enter           Edit field / toggle / save row",
+		"  s               Save",
 		"  , | S | Esc     Cancel",
 		"",
 		"Search",
@@ -1641,16 +1894,51 @@ func (m *Model) openSettingsDialog() {
 	m.settingsDialog = true
 	m.settingsCursor = 0
 	m.settingsDraft = m.settings
-	m.status = "Settings: Space toggles, Enter saves, Esc cancels"
+	m.settingsEditing = false
+	m.textInput.Blur()
+	m.textInput.SetValue("")
+	m.status = "Settings: Enter edits, Space toggles, s saves, Esc cancels"
 }
 
 func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	if m.settingsEditing {
+		switch msg.String() {
+		case "ctrl+c":
+			return m, tea.Quit
+		case "esc":
+			m.settingsEditing = false
+			m.textInput.Blur()
+			m.textInput.SetValue("")
+			m.status = "Canceled settings field edit"
+			return m, nil
+		case "enter":
+			value := strings.TrimSpace(m.textInput.Value())
+			switch m.settingsCursor {
+			case 2:
+				m.settingsDraft.GerritUsername = value
+			case 3:
+				m.settingsDraft.GerritServer = value
+			case 4:
+				m.settingsDraft.BaseGitDir = value
+			}
+			m.settingsEditing = false
+			m.textInput.Blur()
+			m.textInput.SetValue("")
+			m.status = "Updated settings field"
+			return m, nil
+		}
+		var cmd tea.Cmd
+		m.textInput, cmd = m.textInput.Update(msg)
+		return m, cmd
+	}
+
 	switch msg.String() {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc", "S", ",":
 		m.settingsDialog = false
 		m.settingsDraft = m.settings
+		m.settingsEditing = false
 		m.status = "Canceled settings"
 	case "up", "k":
 		m.moveSettingsCursor(-1)
@@ -1659,16 +1947,64 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.toggleCurrentSetting()
 	case "enter":
+		if m.settingsCursor <= 1 {
+			m.toggleCurrentSetting()
+			return m, nil
+		}
+		if m.settingsCursor >= 2 && m.settingsCursor <= 4 {
+			m.settingsEditing = true
+			m.textInput.SetValue(m.currentSettingsFieldValue())
+			m.textInput.Focus()
+			m.status = "Editing settings field"
+			return m, nil
+		}
+		fallthrough
+	case "s":
 		m.settings = m.settingsDraft
 		m.settingsDialog = false
+		m.settingsEditing = false
 		m.persist()
 		m.status = "Saved settings"
 	}
 	return m, nil
 }
 
+func (m Model) handleGerritDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "ctrl+c":
+		return m, tea.Quit
+	case "esc", "g":
+		m.gerritDialog = false
+		m.status = "Closed Gerrit projects"
+	case "up", "k":
+		m.moveGerritCursor(-1)
+	case "down", "j":
+		m.moveGerritCursor(1)
+	case "pgup":
+		m.moveGerritCursor(-m.gerritDialogRows())
+	case "pgdown":
+		m.moveGerritCursor(m.gerritDialogRows())
+	case "a":
+		m.selectAllGerritProjects()
+	case "A":
+		m.gerritChecked = map[string]struct{}{}
+		m.status = "Cleared Gerrit project selection"
+	case " ":
+		m.toggleHighlightedGerritProject()
+	case "enter":
+		added := m.trackCheckedGerritProjects()
+		m.gerritDialog = false
+		m.normalizeCursor()
+		m.ensureRepoCursorVisible(m.repoPanelContentRows())
+		m.persist()
+		m.status = fmt.Sprintf("Tracked %d Gerrit repositories", added)
+		m.logInfo(fmt.Sprintf("gerrit: tracked %d repositories", added))
+	}
+	return m, nil
+}
+
 func (m *Model) moveSettingsCursor(delta int) {
-	const settingsCount = 2
+	const settingsCount = 6
 	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
 }
 
@@ -1689,6 +2025,113 @@ func (m *Model) toggleCurrentSetting() {
 			m.status = "Will disable: show repo info"
 		}
 	}
+}
+
+func (m Model) currentSettingsFieldValue() string {
+	switch m.settingsCursor {
+	case 2:
+		return m.settingsDraft.GerritUsername
+	case 3:
+		return m.settingsDraft.GerritServer
+	case 4:
+		return m.settingsDraft.BaseGitDir
+	default:
+		return ""
+	}
+}
+
+func boolSettingValue(value bool) string {
+	if value {
+		return "[x]"
+	}
+	return "[ ]"
+}
+
+func (m *Model) moveGerritCursor(delta int) {
+	if len(m.gerritProjects) == 0 {
+		m.gerritCursor = 0
+		m.gerritScroll = 0
+		return
+	}
+	m.gerritCursor += delta
+	if m.gerritCursor < 0 {
+		m.gerritCursor = 0
+	}
+	if m.gerritCursor >= len(m.gerritProjects) {
+		m.gerritCursor = len(m.gerritProjects) - 1
+	}
+	m.ensureGerritCursorVisible()
+}
+
+func (m *Model) ensureGerritCursorVisible() {
+	rows := m.gerritDialogRows()
+	if rows <= 0 {
+		rows = 1
+	}
+	if m.gerritScroll < 0 {
+		m.gerritScroll = 0
+	}
+	if m.gerritCursor < m.gerritScroll {
+		m.gerritScroll = m.gerritCursor
+	}
+	if m.gerritCursor >= m.gerritScroll+rows {
+		m.gerritScroll = m.gerritCursor - rows + 1
+	}
+	maxScroll := max(0, len(m.gerritProjects)-rows)
+	if m.gerritScroll > maxScroll {
+		m.gerritScroll = maxScroll
+	}
+}
+
+func (m Model) gerritDialogRows() int {
+	screenH := max(1, m.height-2)
+	dialogH := min(max(18, screenH-2), max(18, screenH))
+	return max(1, dialogH-5)
+}
+
+func (m *Model) toggleHighlightedGerritProject() {
+	if m.gerritCursor < 0 || m.gerritCursor >= len(m.gerritProjects) {
+		return
+	}
+	project := m.gerritProjects[m.gerritCursor]
+	if m.gerritChecked == nil {
+		m.gerritChecked = map[string]struct{}{}
+	}
+	if _, ok := m.gerritChecked[project]; ok {
+		delete(m.gerritChecked, project)
+		m.status = "Unchecked Gerrit project"
+		return
+	}
+	m.gerritChecked[project] = struct{}{}
+	m.status = "Checked Gerrit project"
+}
+
+func (m *Model) selectAllGerritProjects() {
+	if m.gerritChecked == nil {
+		m.gerritChecked = map[string]struct{}{}
+	}
+	for _, project := range m.gerritProjects {
+		m.gerritChecked[project] = struct{}{}
+	}
+	m.status = fmt.Sprintf("Selected all %d Gerrit projects", len(m.gerritProjects))
+}
+
+func (m *Model) trackCheckedGerritProjects() int {
+	if len(m.gerritChecked) == 0 {
+		return 0
+	}
+	projects := make([]string, 0, len(m.gerritChecked))
+	for project := range m.gerritChecked {
+		projects = append(projects, project)
+	}
+	sort.Strings(projects)
+	added := 0
+	for _, project := range projects {
+		if m.trackGerritProject(project) {
+			added++
+		}
+	}
+	return added
 }
 
 func (m *Model) toggleShowRepoInfo() {
@@ -1864,7 +2307,7 @@ func (m *Model) removeRepoFromFavorites(path string) {
 func (m Model) visibleRepoIndexes() []int {
 	indexes := make([]int, 0, len(m.repos))
 	for i, repo := range m.repos {
-		if m.favoritesOnly && !m.isFavorite(repo.Path) {
+		if m.favoritesOnly && !m.isFavorite(m.repoKey(repo)) {
 			continue
 		}
 		if !m.repoMatchesSearch(repo) {
@@ -2106,10 +2549,10 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.status = "No favorites list highlighted"
 			return m, nil
 		}
-		repos := m.favoriteRepos(name)
+		repos := selectableRepos(m.favoriteRepos(name))
 		if len(repos) == 0 {
-			m.status = fmt.Sprintf("No tracked repositories in favorites list: %s", name)
-			m.logInfo("Pull: no tracked repositories in favorites list: " + name)
+			m.status = fmt.Sprintf("No cloned repositories in favorites list: %s", name)
+			m.logInfo("Pull: no cloned repositories in favorites list: " + name)
 			return m, nil
 		}
 		m.busy = true
@@ -2168,7 +2611,7 @@ func (m Model) favoriteRepos(listName string) []store.Repo {
 	}
 	repos := make([]store.Repo, 0, len(paths))
 	for _, repo := range m.repos {
-		if _, ok := paths[repo.Path]; ok {
+		if _, ok := paths[m.repoKey(repo)]; ok {
 			repos = append(repos, repo)
 		}
 	}
@@ -2274,7 +2717,7 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 	}
 
 	for _, r := range m.repos {
-		if r.Path == path {
+		if m.repoKey(r) == path {
 			return false, nil
 		}
 	}
@@ -2290,10 +2733,73 @@ func (m *Model) addRepo(rawPath string) (bool, error) {
 	if len(m.repos) == 1 {
 		m.cursor = 0
 	}
-	m.refreshRepoStatus(path)
+	m.refreshRepoStatus(m.repos[len(m.repos)-1])
 	m.normalizeCursor()
 	m.persist()
 	return true, nil
+}
+
+func (m *Model) trackGerritProject(project string) bool {
+	project = strings.Trim(strings.TrimSpace(project), "/")
+	if project == "" {
+		return false
+	}
+	cfg := m.gerritConfig()
+	path := ""
+	remoteURL := ""
+	if strings.TrimSpace(cfg.BaseDir) != "" {
+		path = gerrit.LocalPath(cfg.BaseDir, project)
+	}
+	if strings.TrimSpace(cfg.Target()) != "" {
+		remoteURL = gerrit.BuildCloneURL(cfg.Target(), project)
+	}
+
+	for i := range m.repos {
+		if m.repos[i].GerritProject == project {
+			if m.repos[i].Path == "" {
+				m.repos[i].Path = path
+			}
+			if m.repos[i].RemoteURL == "" {
+				m.repos[i].RemoteURL = remoteURL
+			}
+			if m.repos[i].Name == "" {
+				m.repos[i].Name = filepath.Base(project)
+			}
+			m.refreshRepoStatus(m.repos[i])
+			return false
+		}
+	}
+
+	repo := store.Repo{
+		Name:          filepath.Base(project),
+		Path:          path,
+		GerritProject: project,
+		RemoteURL:     remoteURL,
+	}
+	m.repos = append(m.repos, repo)
+	sort.Slice(m.repos, func(i, j int) bool {
+		return strings.ToLower(m.repos[i].Name) < strings.ToLower(m.repos[j].Name)
+	})
+	if len(m.repos) == 1 {
+		m.cursor = 0
+	}
+	m.refreshRepoStatuses()
+	return true
+}
+
+func (m Model) gerritConfig() gerrit.Config {
+	return gerrit.Config{
+		Username: strings.TrimSpace(m.settings.GerritUsername),
+		Server:   strings.TrimSpace(m.settings.GerritServer),
+		BaseDir:  strings.TrimSpace(m.settings.BaseGitDir),
+	}
+}
+
+func (m Model) isCloneableRepo(repo store.Repo) bool {
+	if strings.TrimSpace(repo.Path) == "" || strings.TrimSpace(repo.RemoteURL) == "" {
+		return false
+	}
+	return !gitutil.IsGitRepo(repo.Path)
 }
 
 func (m *Model) persist() {
@@ -2321,11 +2827,44 @@ func selectedRepos(repos []store.Repo) []store.Repo {
 	return selected
 }
 
+func selectableRepos(repos []store.Repo) []store.Repo {
+	selected := make([]store.Repo, 0, len(repos))
+	for _, r := range repos {
+		if strings.TrimSpace(r.Path) == "" {
+			continue
+		}
+		selected = append(selected, r)
+	}
+	return selected
+}
+
+func cloneableRepos(repos []store.Repo) []store.Repo {
+	selected := make([]store.Repo, 0, len(repos))
+	for _, r := range repos {
+		if strings.TrimSpace(r.Path) == "" || strings.TrimSpace(r.RemoteURL) == "" {
+			continue
+		}
+		if gitutil.IsGitRepo(r.Path) {
+			continue
+		}
+		selected = append(selected, r)
+	}
+	return selected
+}
+
+func makeSequentialIndexes(count int) []int {
+	indexes := make([]int, count)
+	for i := range indexes {
+		indexes[i] = i
+	}
+	return indexes
+}
+
 func (m *Model) logPullStart(scope string, repos []store.Repo) {
 	m.logInfo(fmt.Sprintf("--- Pull started: %s (%d repos) ---", scope, len(repos)))
 	for _, r := range repos {
 		m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
-		if m.settings.ShowGitCommands {
+		if m.settings.ShowGitCommands && strings.TrimSpace(r.Path) != "" {
 			m.logInfo("  $ " + gitutil.PullCommand(r.Path))
 		}
 	}
@@ -2335,8 +2874,18 @@ func (m *Model) logFetchStart(scope string, repos []store.Repo) {
 	m.logInfo(fmt.Sprintf("--- Fetch started: %s (%d repos) ---", scope, len(repos)))
 	for _, r := range repos {
 		m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
-		if m.settings.ShowGitCommands {
+		if m.settings.ShowGitCommands && strings.TrimSpace(r.Path) != "" {
 			m.logInfo("  $ " + gitutil.FetchCommand(r.Path))
+		}
+	}
+}
+
+func (m *Model) logCloneStart(scope string, repos []store.Repo) {
+	m.logInfo(fmt.Sprintf("--- Clone started: %s (%d repos) ---", scope, len(repos)))
+	for _, r := range repos {
+		m.logInfo(fmt.Sprintf("  queued: %s", r.Name))
+		if m.settings.ShowGitCommands && strings.TrimSpace(r.Path) != "" && strings.TrimSpace(r.RemoteURL) != "" {
+			m.logInfo("  $ " + gitutil.CloneCommand(r.RemoteURL, r.Path))
 		}
 	}
 }
@@ -2357,7 +2906,7 @@ func pullSelectedCmd(repos []store.Repo) tea.Cmd {
 
 				out, err := gitutil.Pull(repos[i].Path)
 				results[i] = pullResult{
-					path:   repos[i].Path,
+					path:   store.RepoKey(repos[i]),
 					output: out,
 					err:    err,
 				}
@@ -2385,7 +2934,7 @@ func fetchSelectedCmd(repos []store.Repo) tea.Cmd {
 
 				out, err := gitutil.Fetch(repos[i].Path)
 				results[i] = pullResult{
-					path:   repos[i].Path,
+					path:   store.RepoKey(repos[i]),
 					output: out,
 					err:    err,
 				}
@@ -2394,6 +2943,45 @@ func fetchSelectedCmd(repos []store.Repo) tea.Cmd {
 
 		wg.Wait()
 		return fetchFinishedMsg{results: results}
+	}
+}
+
+func cloneSelectedCmd(repos []store.Repo) tea.Cmd {
+	return func() tea.Msg {
+		const maxWorkers = 4
+		sem := make(chan struct{}, maxWorkers)
+		results := make([]pullResult, len(repos))
+		var wg sync.WaitGroup
+
+		for i := range repos {
+			wg.Add(1)
+			go func(i int) {
+				defer wg.Done()
+				sem <- struct{}{}
+				defer func() { <-sem }()
+
+				out, err := gitutil.Clone(repos[i].RemoteURL, repos[i].Path)
+				results[i] = pullResult{
+					path:   store.RepoKey(repos[i]),
+					output: out,
+					err:    err,
+				}
+			}(i)
+		}
+
+		wg.Wait()
+		return cloneFinishedMsg{results: results}
+	}
+}
+
+func loadGerritProjectsCmd(cfg gerrit.Config) tea.Cmd {
+	return func() tea.Msg {
+		projects, output, err := gerrit.ListProjects(cfg)
+		return gerritProjectsLoadedMsg{
+			projects: projects,
+			output:   output,
+			err:      err,
+		}
 	}
 }
 
@@ -2407,7 +2995,7 @@ func openEditorCmd(editor string, executable string, repo store.Repo) tea.Cmd {
 		return vscodeOpenedMsg{
 			editor:   editor,
 			repoName: repo.Name,
-			path:     repo.Path,
+			path:     store.RepoKey(repo),
 			err:      err,
 		}
 	}

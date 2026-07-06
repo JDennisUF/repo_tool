@@ -16,6 +16,9 @@ Terminal UI utility for tracking many Git repositories and running actions acros
 - Favorites lists, filtering, and batch actions
 - Search in repos, themes, and command output (`/`)
 - Settings dialog (`,` or `S`)
+- Gerrit settings for username, server, and base git directory
+- Gerrit project browser with a scrollable checkbox list for large `ls-projects` results
+- Clone tracked Gerrit repos on demand after tracking them
 - Toggle repo info panel (`+`)
 - Two focusable sections (`0`, `1`)
 - JSON-backed color themes
@@ -39,7 +42,9 @@ go build -o rt ./cmd/rt
 - `A`: deselect all repos
 - `o`: add one repo by path (supports drag-and-drop path paste)
 - `s`: scan/search a root directory for repos
+- `g`: load Gerrit projects and open the project picker
 - `p`: pull selected repos, or the highlighted repo if none are selected
+- `c`: clone selected uncloned Gerrit repos, or the highlighted repo if none are selected
 - `h`: fetch selected repos, or the highlighted repo if none are selected
 - `z`: launch lazygit on highlighted repo
 - `v`: launch VS Code on highlighted repo
@@ -103,6 +108,8 @@ The `background` value controls the full app canvas, including otherwise empty t
 
 - Repositories are persisted at:
   - Linux: `~/.config/rt/repos.json`
+- Gerrit settings are stored in the same config file and are now editable from the settings dialog.
 - Pull uses `git pull --ff-only` for safer batch updates.
 - Fetch uses `git fetch --all --prune`.
+- Clone uses `git clone <remote> <path>`.
 - `lazygit` must be installed and in `PATH` for `z` to work.

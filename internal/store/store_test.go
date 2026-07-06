@@ -47,6 +47,9 @@ func TestLoadMigratesLegacyRepoState(t *testing.T) {
 	if !state.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should default to true for legacy state")
 	}
+	if state.Settings.GerritUsername != "" || state.Settings.GerritServer != "" || state.Settings.BaseGitDir != "" {
+		t.Fatalf("unexpected gerrit settings in legacy state: %+v", state.Settings)
+	}
 }
 
 func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
@@ -59,6 +62,7 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	in := State{
 		Repos: []Repo{
 			{Name: "repo", Path: "/tmp/repo", Selected: true, LastOp: "pull ok", LastUpdated: "2026-07-02T10:11:12Z"},
+			{Name: "proj", Path: "/tmp/git/proj", GerritProject: "team/proj", RemoteURL: "ssh://alice@gerrit/team/proj"},
 		},
 		FavoriteLists: map[string][]string{
 			"work":     {"/tmp/repo", "/tmp/repo"},
@@ -68,6 +72,9 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 		Settings: Settings{
 			ShowGitCommands: true,
 			ShowRepoInfo:    true,
+			GerritUsername:  "alice",
+			GerritServer:    "gerrit.example.com",
+			BaseGitDir:      "/tmp/git",
 		},
 	}
 	if err := s.Save(in); err != nil {
@@ -88,14 +95,33 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	if got := out.FavoriteLists["personal"]; len(got) != 1 || got[0] != "/tmp/other" {
 		t.Fatalf("personal favorites = %#v, want [/tmp/other]", got)
 	}
-	if out.Repos[0].LastUpdated != "2026-07-02T10:11:12Z" {
-		t.Fatalf("last updated = %q, want %q", out.Repos[0].LastUpdated, "2026-07-02T10:11:12Z")
+	var localRepo Repo
+	var gerritRepo Repo
+	for _, repo := range out.Repos {
+		switch repo.Name {
+		case "repo":
+			localRepo = repo
+		case "proj":
+			gerritRepo = repo
+		}
+	}
+	if localRepo.LastUpdated != "2026-07-02T10:11:12Z" {
+		t.Fatalf("last updated = %q, want %q", localRepo.LastUpdated, "2026-07-02T10:11:12Z")
+	}
+	if got := gerritRepo.GerritProject; got != "team/proj" {
+		t.Fatalf("gerrit project = %q, want %q", got, "team/proj")
+	}
+	if got := gerritRepo.RemoteURL; got != "ssh://alice@gerrit/team/proj" {
+		t.Fatalf("remote url = %q, want %q", got, "ssh://alice@gerrit/team/proj")
 	}
 	if !out.Settings.ShowGitCommands {
 		t.Fatal("show git commands should persist")
 	}
 	if !out.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should persist")
+	}
+	if out.Settings.GerritUsername != "alice" || out.Settings.GerritServer != "gerrit.example.com" || out.Settings.BaseGitDir != "/tmp/git" {
+		t.Fatalf("gerrit settings mismatch: %+v", out.Settings)
 	}
 }
 
@@ -123,5 +149,34 @@ func TestSaveLoadPreservesDisabledRepoInfo(t *testing.T) {
 
 	if out.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should remain false after reload")
+	}
+}
+
+func TestLoadDeduplicatesByGerritProject(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.json")
+	data := []byte(`{
+  "repos": [
+    {"name":"proj","path":"/tmp/git/a","gerritProject":"team/proj"},
+    {"name":"proj-copy","path":"/tmp/other","gerritProject":"team/proj"}
+  ]
+}`)
+	if err := os.WriteFile(path, data, 0o644); err != nil {
+		t.Fatalf("write state: %v", err)
+	}
+
+	s := &Store{path: path}
+	state, err := s.Load()
+	if err != nil {
+		t.Fatalf("load state: %v", err)
+	}
+
+	if got := len(state.Repos); got != 1 {
+		t.Fatalf("repo count = %d, want 1", got)
+	}
+	if got := state.Repos[0].GerritProject; got != "team/proj" {
+		t.Fatalf("project = %q, want team/proj", got)
 	}
 }

@@ -15,11 +15,13 @@ const (
 )
 
 type Repo struct {
-	Name        string `json:"name"`
-	Path        string `json:"path"`
-	Selected    bool   `json:"selected"`
-	LastOp      string `json:"lastOp,omitempty"`
-	LastUpdated string `json:"lastUpdated,omitempty"`
+	Name          string `json:"name"`
+	Path          string `json:"path,omitempty"`
+	GerritProject string `json:"gerritProject,omitempty"`
+	RemoteURL     string `json:"remoteUrl,omitempty"`
+	Selected      bool   `json:"selected"`
+	LastOp        string `json:"lastOp,omitempty"`
+	LastUpdated   string `json:"lastUpdated,omitempty"`
 }
 
 type State struct {
@@ -30,8 +32,11 @@ type State struct {
 }
 
 type Settings struct {
-	ShowGitCommands bool `json:"showGitCommands"`
-	ShowRepoInfo    bool `json:"showRepoInfo"`
+	ShowGitCommands bool   `json:"showGitCommands"`
+	ShowRepoInfo    bool   `json:"showRepoInfo"`
+	GerritUsername  string `json:"gerritUsername,omitempty"`
+	GerritServer    string `json:"gerritServer,omitempty"`
+	BaseGitDir      string `json:"baseGitDir,omitempty"`
 }
 
 type Store struct {
@@ -66,23 +71,35 @@ func (s *Store) Load() (State, error) {
 	normalizedRepos := make([]Repo, 0, len(state.Repos))
 	seen := map[string]struct{}{}
 	for _, r := range state.Repos {
-		if r.Path == "" {
+		if r.Path == "" && r.GerritProject == "" {
 			continue
 		}
-		cleanPath := filepath.Clean(r.Path)
-		if _, exists := seen[cleanPath]; exists {
-			continue
+		if r.Path != "" {
+			r.Path = filepath.Clean(r.Path)
 		}
-		r.Path = cleanPath
+		r.GerritProject = strings.Trim(strings.TrimSpace(r.GerritProject), "/")
+		r.RemoteURL = strings.TrimSpace(r.RemoteURL)
 		if r.Name == "" {
-			r.Name = filepath.Base(cleanPath)
+			switch {
+			case r.GerritProject != "":
+				r.Name = filepath.Base(r.GerritProject)
+			case r.Path != "":
+				r.Name = filepath.Base(r.Path)
+			}
+		}
+		key := repoKey(r)
+		if key == "" {
+			continue
+		}
+		if _, exists := seen[key]; exists {
+			continue
 		}
 		normalizedRepos = append(normalizedRepos, r)
-		seen[cleanPath] = struct{}{}
+		seen[key] = struct{}{}
 	}
 
 	sort.Slice(normalizedRepos, func(i, j int) bool {
-		return normalizedRepos[i].Name < normalizedRepos[j].Name
+		return strings.ToLower(normalizedRepos[i].Name) < strings.ToLower(normalizedRepos[j].Name)
 	})
 
 	state.Repos = normalizedRepos
@@ -95,6 +112,20 @@ func (s *Store) Load() (State, error) {
 	}
 
 	return state, nil
+}
+
+func RepoKey(repo Repo) string {
+	return repoKey(repo)
+}
+
+func repoKey(repo Repo) string {
+	if repo.GerritProject != "" {
+		return "gerrit:" + repo.GerritProject
+	}
+	if repo.Path != "" {
+		return filepath.Clean(repo.Path)
+	}
+	return ""
 }
 
 func (s *Store) Save(state State) error {

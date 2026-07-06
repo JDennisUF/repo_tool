@@ -131,6 +131,37 @@ func TestFetchCommand(t *testing.T) {
 	}
 }
 
+func TestCloneCommand(t *testing.T) {
+	remoteURL := "ssh://alice@gerrit.example.com/team/repo"
+	path := "/tmp/repo with spaces"
+	if got, want := CloneCommand(remoteURL, path), `git clone "ssh://alice@gerrit.example.com/team/repo" "/tmp/repo with spaces"`; got != want {
+		t.Fatalf("clone command = %q, want %q", got, want)
+	}
+}
+
+func TestClone(t *testing.T) {
+	remote := filepath.Join(t.TempDir(), "remote.git")
+	runGit(t, "", "init", "--bare", remote)
+
+	seed := t.TempDir()
+	runGit(t, "", "init", seed)
+	writeFile(t, filepath.Join(seed, "tracked.txt"), "hello\n")
+	runGit(t, seed, "add", "tracked.txt")
+	runGit(t, seed, "-c", "user.name=Test", "-c", "user.email=test@example.com", "commit", "-m", "init")
+	runGit(t, seed, "branch", "-M", "main")
+	runGit(t, seed, "remote", "add", "origin", remote)
+	runGit(t, seed, "push", "-u", "origin", "main")
+	runGit(t, "", "--git-dir", remote, "symbolic-ref", "HEAD", "refs/heads/main")
+
+	target := filepath.Join(t.TempDir(), "nested", "clone")
+	if _, err := Clone(remote, target); err != nil {
+		t.Fatalf("clone failed: %v", err)
+	}
+	if !IsGitRepo(target) {
+		t.Fatalf("expected git repo at %s", target)
+	}
+}
+
 func initTestRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

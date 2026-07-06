@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -128,6 +129,35 @@ func Fetch(path string) (string, error) {
 
 func FetchCommand(path string) string {
 	return fmt.Sprintf("git -C %s fetch --all --prune", strconv.Quote(path))
+}
+
+func Clone(remoteURL string, path string) (string, error) {
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+
+	cmd := exec.Command("git", "clone", remoteURL, path)
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd.Stdout = &stdout
+	cmd.Stderr = &stderr
+
+	err := cmd.Run()
+	out := strings.TrimSpace(stdout.String())
+	errOut := strings.TrimSpace(stderr.String())
+	combined := strings.TrimSpace(strings.Join([]string{out, errOut}, "\n"))
+	if combined == "" {
+		combined = "no output"
+	}
+
+	if err != nil {
+		return combined, fmt.Errorf("clone failed: %w", err)
+	}
+	return combined, nil
+}
+
+func CloneCommand(remoteURL string, path string) string {
+	return fmt.Sprintf("git clone %s %s", strconv.Quote(remoteURL), strconv.Quote(path))
 }
 
 func InspectStatus(path string) RepoStatus {
