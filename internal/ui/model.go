@@ -680,7 +680,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				return m, nil
 			}
 			cfg := m.gerritConfig()
-			if err := cfg.ValidateForClone(); err != nil {
+			if err := cfg.ValidateForListing(); err != nil {
 				m.status = fmt.Sprintf("Gerrit settings incomplete: %v", err)
 				return m, nil
 			}
