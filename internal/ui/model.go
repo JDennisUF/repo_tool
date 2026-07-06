@@ -1429,7 +1429,7 @@ func (m Model) favoritesDialogView(width int, rows int) string {
 func (m Model) helpView(width int) string {
 	raw := []string{
 		"Navigation",
-		"  j | k           Move / scroll output",
+		"  j | k           Move Down | Up",
 		"  up | down       Move / scroll output",
 		"  left | right    Cycle focus",
 		"  0               Focus repos",
@@ -1474,7 +1474,7 @@ func (m Model) helpView(width int) string {
 		"  q               Quit",
 		"",
 		"Settings",
-		"  j | k           Move",
+		"  j | k           Move Down | Up",
 		"  space           Toggle",
 		"  Enter           Save",
 		"  , | S | Esc     Cancel",
