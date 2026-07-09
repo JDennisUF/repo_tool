@@ -1076,31 +1076,13 @@ func (m Model) hasLocalRepo(repo store.Repo) bool {
 
 func (m Model) buildReposContent(width int, rows int) string {
 	contentW := max(1, width-1)
-	branchW := 14
 	updatedW := 5
 	syncW := 7
 	ageW := 5
-	authorW := 18
-	nameW := 20
-	opW := 7
-	if !m.settings.ShowRepoInfo {
-		opW = 9
-	}
 	const separatorCount = 7
 	fixedW := 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
-	flexibleW := nameW + branchW + authorW + opW
-	slack := max(0, contentW-fixedW-flexibleW)
-	nameExtra := slack / 2
-	branchExtra := slack / 3
-	authorExtra := slack - nameExtra - branchExtra
-	if !m.settings.ShowRepoInfo {
-		nameExtra = slack / 2
-		branchExtra = slack / 3
-		authorExtra = slack - nameExtra - branchExtra
-	}
-	nameW += nameExtra
-	authorW += authorExtra
-	branchW += branchExtra
+	visible := m.visibleRepoIndexes()
+	nameW, branchW, authorW, opW := m.repoColumnWidths(max(0, contentW-fixedW), visible)
 	header := padCell("Sel", 3) +
 		" " + padCell("F", 3) +
 		" " + padCell("Name ("+m.activeFavoriteList+")", nameW) +
@@ -1119,7 +1101,6 @@ func (m Model) buildReposContent(width int, rows int) string {
 		),
 	}
 
-	visible := m.visibleRepoIndexes()
 	if len(m.repos) == 0 {
 		lines = append(lines, padStyledCell(m.fgStyle(m.theme.Muted).Render("(no repos; press o to add, s to scan, or g for Gerrit)"), contentW, m.theme.Background))
 	} else if len(visible) == 0 {
@@ -1955,6 +1936,73 @@ func (m Model) helpView(width int) string {
 	}
 
 	return strings.Join(lines, "\n")
+}
+
+func (m Model) repoColumnWidths(available int, visible []int) (nameW int, branchW int, authorW int, opW int) {
+	minNameW := 12
+	minBranchW := 8
+	minAuthorW := 8
+	minOpW := 6
+	if !m.settings.ShowRepoInfo {
+		minOpW = 8
+	}
+
+	nameW = max(minNameW, lipgloss.Width("Name ("+m.activeFavoriteList+")"))
+	branchW = max(minBranchW, lipgloss.Width("Branch"))
+	authorW = max(minAuthorW, lipgloss.Width("Author"))
+	opW = max(minOpW, lipgloss.Width("Op"))
+
+	for _, idx := range visible {
+		repo := m.repos[idx]
+		meta := m.repoMetadata(repo)
+		nameW = max(nameW, lipgloss.Width(repo.Name))
+		branch := meta.CurrentBranch
+		if branch == "" {
+			branch = "-"
+		}
+		branchW = max(branchW, lipgloss.Width(branch))
+		author := meta.LastCommitAuthor
+		if author == "" {
+			author = "-"
+		}
+		authorW = max(authorW, lipgloss.Width(author))
+		op := repo.LastOp
+		if op == "" {
+			op = "-"
+		}
+		opW = max(opW, lipgloss.Width(op))
+	}
+
+	widths := []int{nameW, branchW, authorW, opW}
+	mins := []int{minNameW, minBranchW, minAuthorW, minOpW}
+	total := nameW + branchW + authorW + opW
+
+	if total > available {
+		overflow := total - available
+		for overflow > 0 {
+			bestIdx := -1
+			bestSurplus := 0
+			for i := range widths {
+				surplus := widths[i] - mins[i]
+				if surplus > bestSurplus {
+					bestSurplus = surplus
+					bestIdx = i
+				}
+			}
+			if bestIdx == -1 {
+				break
+			}
+			widths[bestIdx]--
+			overflow--
+		}
+		total = widths[0] + widths[1] + widths[2] + widths[3]
+	}
+
+	if total < available {
+		widths[3] += available - total
+	}
+
+	return widths[0], widths[1], widths[2], widths[3]
 }
 
 func (m Model) renderHelpSections(sections [][]string) []string {
