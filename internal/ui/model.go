@@ -1076,40 +1076,44 @@ func (m Model) hasLocalRepo(repo store.Repo) bool {
 
 func (m Model) buildReposContent(width int, rows int) string {
 	contentW := max(1, width-1)
-	branchW := 12
+	branchW := 14
 	updatedW := 5
 	syncW := 7
 	ageW := 5
-	authorW := 16
-	nameW := 18
-	opW := 10
+	authorW := 18
+	nameW := 20
+	opW := 7
 	if !m.settings.ShowRepoInfo {
-		opW = 18
+		opW = 9
 	}
-	const separatorCount = 9
+	const separatorCount = 7
 	fixedW := 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
 	flexibleW := nameW + branchW + authorW + opW
 	slack := max(0, contentW-fixedW-flexibleW)
 	nameExtra := slack / 2
-	authorExtra := slack / 3
-	branchExtra := slack - nameExtra - authorExtra
+	branchExtra := slack / 3
+	authorExtra := slack - nameExtra - branchExtra
 	if !m.settings.ShowRepoInfo {
-		opExtra := slack / 4
-		nameExtra = slack / 3
-		authorExtra = slack / 4
-		branchExtra = slack - nameExtra - authorExtra - opExtra
-		opW += opExtra
+		nameExtra = slack / 2
+		branchExtra = slack / 3
+		authorExtra = slack - nameExtra - branchExtra
 	}
 	nameW += nameExtra
 	authorW += authorExtra
 	branchW += branchExtra
-	sep := m.bgStyle().Render(" ")
+	header := padCell("Sel", 3) +
+		" " + padCell("F", 3) +
+		" " + padCell("Name ("+m.activeFavoriteList+")", nameW) +
+		" " + padCell("St", 6) +
+		padCell("↑↓", syncW) +
+		padCell("Upd", updatedW) +
+		" " + padCell("Branch", branchW) +
+		" " + padCell("Age", ageW) +
+		" " + padCell("Author", authorW) +
+		" " + padCell("Op", opW)
 	lines := []string{
 		padStyledCell(
-			m.fgStyle(m.theme.Muted).Render(trimRight(
-				padCell("Sel", 3)+" "+padCell("F", 3)+" "+padCell("Name ("+m.activeFavoriteList+")", nameW)+" "+padCell("St", 6)+" "+padCell("↑↓", syncW)+" "+padCell("Upd", updatedW)+" "+padCell("Branch", branchW)+" "+padCell("Age", ageW)+" "+padCell("Author", authorW)+" "+padCell("Op", opW),
-				contentW,
-			)),
+			m.fgStyle(m.theme.Muted).Render(trimRight(header, contentW)),
 			contentW,
 			m.theme.Background,
 		),
@@ -1137,9 +1141,6 @@ func (m Model) buildReposContent(width int, rows int) string {
 			rowBg := m.theme.Background
 			if focused {
 				rowBg = m.theme.RowFocusBg
-				sep = m.bgStyle().Background(lipgloss.Color(rowBg)).Render(" ")
-			} else {
-				sep = m.bgStyle().Render(" ")
 			}
 
 			selStyle := m.fgBgStyle(m.theme.Foreground, rowBg)
@@ -1207,18 +1208,20 @@ func (m Model) buildReposContent(width int, rows int) string {
 			if commitAuthor == "" {
 				commitAuthor = "-"
 			}
-			row := strings.Join([]string{
-				selStyle.Render(padCell(sel, 3)),
-				favStyle.Render(padCell(fav, 3)),
-				nameStyle.Render(padCell(name, nameW)),
-				statusStyle.Render(padCell(status.Symbol(), 6)),
-				m.renderSyncCell(meta, rowBg, syncW),
-				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(updated, updatedW)),
-				branchStyle.Render(padCell(branch, branchW)),
-				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(commitAge, ageW)),
-				authorStyle.Render(padCell(commitAuthor, authorW)),
-				opStyle.Render(padCell(trimRight(op, opW), opW)),
-			}, sep)
+			sep := m.bgStyle().Render(" ")
+			if focused {
+				sep = m.bgStyle().Background(lipgloss.Color(rowBg)).Render(" ")
+			}
+			row := selStyle.Render(padCell(sel, 3)) +
+				sep + favStyle.Render(padCell(fav, 3)) +
+				sep + nameStyle.Render(padCell(name, nameW)) +
+				sep + statusStyle.Render(padCell(status.Symbol(), 6)) +
+				m.renderSyncCell(meta, rowBg, syncW) +
+				m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(updated, updatedW)) +
+				sep + branchStyle.Render(padCell(branch, branchW)) +
+				sep + m.fgBgStyle(m.theme.Muted, rowBg).Render(padCell(commitAge, ageW)) +
+				sep + authorStyle.Render(padCell(commitAuthor, authorW)) +
+				sep + opStyle.Render(padCell(trimRight(op, opW), opW))
 			lines = append(lines, padStyledCell(row, contentW, rowBg))
 		}
 	}
