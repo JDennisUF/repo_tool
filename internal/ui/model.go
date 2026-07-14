@@ -2057,14 +2057,12 @@ func (m Model) renderHelpEntryLine(line string) string {
 func (m Model) labelValue(label string, value string, width int) string {
 	labelStyle := m.fgStyle(m.theme.Accent).Bold(true)
 	valueStyle := m.fgStyle(m.theme.Foreground)
-	const labelColumnWidth = 15
-	prefix := padCell(label, labelColumnWidth) + ": "
+	prefix := label + ": "
 	if label == "" {
-		prefix = strings.Repeat(" ", labelColumnWidth+2)
+		prefix = "  "
 	}
 	availableWidth := max(1, width-lipgloss.Width(prefix))
-	line := labelStyle.Render(prefix) + valueStyle.Render(trimRight(value, availableWidth))
-	return padStyledCell(line, width, m.theme.Background)
+	return labelStyle.Render(prefix) + valueStyle.Render(padCell(trimRight(value, availableWidth), availableWidth))
 }
 
 func (m *Model) openThemeSelector() {
