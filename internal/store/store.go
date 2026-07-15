@@ -30,6 +30,7 @@ type State struct {
 	Repos              []Repo              `json:"repos"`
 	FavoriteLists      map[string][]string `json:"favoriteLists,omitempty"`
 	ActiveFavoriteList string              `json:"activeFavoriteList,omitempty"`
+	FavoritesOnly      bool                `json:"favoritesOnly,omitempty"`
 	Settings           Settings            `json:"settings,omitempty"`
 }
 

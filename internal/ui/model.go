@@ -188,6 +188,7 @@ func NewModel() Model {
 	m.repos = state.Repos
 	m.favoriteLists = favoriteListsFromState(state.FavoriteLists)
 	m.activeFavoriteList = state.ActiveFavoriteList
+	m.favoritesOnly = state.FavoritesOnly
 	m.settings = state.Settings
 	if m.activeFavoriteList == "" {
 		m.activeFavoriteList = defaultFavoriteListName
@@ -3243,6 +3244,7 @@ func (m *Model) persist() {
 		Repos:              m.repos,
 		FavoriteLists:      m.favoriteListsForStore(),
 		ActiveFavoriteList: m.activeFavoriteList,
+		FavoritesOnly:      m.favoritesOnly,
 		Settings:           m.settings,
 	}
 	if err := m.store.Save(state); err != nil {

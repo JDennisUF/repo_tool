@@ -69,6 +69,7 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 			"personal": {"/tmp/other"},
 		},
 		ActiveFavoriteList: "work",
+		FavoritesOnly:      true,
 		Settings: Settings{
 			ShowGitCommands: true,
 			ShowRepoInfo:    true,
@@ -88,6 +89,9 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 
 	if out.ActiveFavoriteList != "work" {
 		t.Fatalf("active favorite list = %q, want work", out.ActiveFavoriteList)
+	}
+	if !out.FavoritesOnly {
+		t.Fatal("favorites only should persist")
 	}
 	if got := out.FavoriteLists["work"]; len(got) != 1 || got[0] != "/tmp/repo" {
 		t.Fatalf("work favorites = %#v, want [/tmp/repo]", got)
