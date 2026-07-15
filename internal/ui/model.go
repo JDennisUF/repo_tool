@@ -573,19 +573,46 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 			m.persist()
 		case "F":
-			if idx, ok := m.currentRepoIndex(); ok {
-				repo := m.repos[idx]
+			targets := selectedRepos(m.repos)
+			if len(targets) == 0 {
+				if idx, ok := m.currentRepoIndex(); ok {
+					repo := m.repos[idx]
+					if m.toggleFavorite(m.repoKey(repo)) {
+						m.status = fmt.Sprintf("Favorited %s in %s", repo.Name, m.activeFavoriteList)
+						m.logInfo(fmt.Sprintf("favorite added: %s -> %s", repo.Name, m.activeFavoriteList))
+					} else {
+						m.status = fmt.Sprintf("Unfavorited %s from %s", repo.Name, m.activeFavoriteList)
+						m.logInfo(fmt.Sprintf("favorite removed: %s -> %s", repo.Name, m.activeFavoriteList))
+					}
+					m.normalizeCursor()
+					m.ensureRepoCursorVisible(m.repoPanelContentRows())
+					m.persist()
+				}
+				break
+			}
+
+			added := 0
+			removed := 0
+			for _, repo := range targets {
 				if m.toggleFavorite(m.repoKey(repo)) {
-					m.status = fmt.Sprintf("Favorited %s in %s", repo.Name, m.activeFavoriteList)
+					added++
 					m.logInfo(fmt.Sprintf("favorite added: %s -> %s", repo.Name, m.activeFavoriteList))
 				} else {
-					m.status = fmt.Sprintf("Unfavorited %s from %s", repo.Name, m.activeFavoriteList)
+					removed++
 					m.logInfo(fmt.Sprintf("favorite removed: %s -> %s", repo.Name, m.activeFavoriteList))
 				}
-				m.normalizeCursor()
-				m.ensureRepoCursorVisible(m.repoPanelContentRows())
-				m.persist()
 			}
+			switch {
+			case added > 0 && removed == 0:
+				m.status = fmt.Sprintf("Favorited %d repos in %s", added, m.activeFavoriteList)
+			case removed > 0 && added == 0:
+				m.status = fmt.Sprintf("Unfavorited %d repos from %s", removed, m.activeFavoriteList)
+			default:
+				m.status = fmt.Sprintf("Updated favorites for %d repos in %s", added+removed, m.activeFavoriteList)
+			}
+			m.normalizeCursor()
+			m.ensureRepoCursorVisible(m.repoPanelContentRows())
+			m.persist()
 		case "r":
 			if idx, ok := m.currentRepoIndex(); ok {
 				repo := m.repos[idx]
