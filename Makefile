@@ -3,7 +3,7 @@ BINARY := rt
 .PHONY: build clean
 
 build:
-	go build -o $(BINARY) ./cmd/rt
+	./build.sh $(BINARY)
 
 clean:
 	rm -f $(BINARY)

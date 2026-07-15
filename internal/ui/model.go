@@ -19,6 +19,7 @@ import (
 	"repo_tool/internal/gerrit"
 	"repo_tool/internal/gitutil"
 	"repo_tool/internal/store"
+	"repo_tool/internal/version"
 )
 
 type inputMode int
@@ -1015,6 +1016,10 @@ func (m Model) sectionStyle(width int, height int, focused bool) lipgloss.Style 
 }
 
 func (m Model) renderSection(number int, title string, body string, width int, height int, focused bool) string {
+	return m.renderSectionWithMeta(number, title, "", body, width, height, focused)
+}
+
+func (m Model) renderSectionWithMeta(number int, title string, meta string, body string, width int, height int, focused bool) string {
 	borderColor := m.theme.Border
 	if focused {
 		borderColor = m.theme.BorderFocus
@@ -1029,13 +1034,22 @@ func (m Model) renderSection(number int, title string, body string, width int, h
 	header := m.fgStyle(m.theme.Header).
 		Bold(true).
 		Render(headerText)
-	headerFill := max(0, innerW-lipgloss.Width(header))
+	metaText := ""
+	if strings.TrimSpace(meta) != "" {
+		metaText = m.fgStyle(m.theme.Muted).Render(meta)
+	}
+	headerFill := max(0, innerW-lipgloss.Width(header)-lipgloss.Width(metaText))
+	if metaText != "" {
+		headerFill = max(1, headerFill)
+	}
 	borderStyle := lipgloss.NewStyle().
 		Foreground(lipgloss.Color(borderColor)).
 		Background(lipgloss.Color(m.theme.Background))
 	top := borderStyle.Render(border.TopLeft) +
 		header +
-		borderStyle.Render(strings.Repeat(border.Top, headerFill)+border.TopRight)
+		borderStyle.Render(strings.Repeat(border.Top, headerFill)) +
+		metaText +
+		borderStyle.Render(border.TopRight)
 
 	content := m.padBackground(m.indentBody(body, innerW), innerW, innerH)
 	lines := strings.Split(content, "\n")
@@ -1404,7 +1418,7 @@ func (m Model) View() string {
 		outputH = max(5, bodyH-topH)
 	}
 
-	leftPanel := m.renderSection(0, m.titleWithSearch("Repos", m.repoSearchQuery), m.buildReposContent(max(1, lw-2), max(1, topH-2)), lw, topH, m.focus == focusRepos)
+	leftPanel := m.renderSectionWithMeta(0, m.titleWithSearch("Repos", m.repoSearchQuery), version.Label(), m.buildReposContent(max(1, lw-2), max(1, topH-2)), lw, topH, m.focus == focusRepos)
 
 	body := leftPanel
 	if rw > 0 {
