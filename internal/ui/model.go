@@ -1458,16 +1458,14 @@ func (m Model) renderApp(content string) string {
 
 func (m Model) fgStyle(color string) lipgloss.Style {
 	return lipgloss.NewStyle().
-		Foreground(lipgloss.Color(color))
+		Foreground(lipgloss.Color(color)).
+		Background(lipgloss.Color(m.theme.Background))
 }
 
 func (m Model) fgBgStyle(color string, bg string) lipgloss.Style {
-	style := lipgloss.NewStyle().
-		Foreground(lipgloss.Color(color))
-	if bg != m.theme.Background {
-		style = style.Background(lipgloss.Color(bg))
-	}
-	return style
+	return lipgloss.NewStyle().
+		Foreground(lipgloss.Color(color)).
+		Background(lipgloss.Color(bg))
 }
 
 func (m Model) bgStyle() lipgloss.Style {
