@@ -819,6 +819,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			limit := max(0, len(m.output)-m.outPanelHeight())
 			m.outScroll = min(m.outScroll+step, limit)
 		}
+
+	case tea.MouseMsg:
+		if msg.Type == tea.MouseLeft {
+			if idx, ok := m.repoIndexAt(msg.X, msg.Y); ok {
+				m.cursor = idx
+				m.ensureRepoCursorVisible(m.repoPanelContentRows())
+				m.setFocus(focusRepos)
+				return m, nil
+			}
+		}
 	}
 
 	return m, nil
@@ -852,6 +862,45 @@ func (m *Model) repoPanelContentRows() int {
 		rows = 1
 	}
 	return rows - 1 // reserve one row for the repo header
+}
+
+func (m Model) repoIndexAt(x int, y int) (int, bool) {
+	if m.outputMaximized || m.showHelp || m.deleteConfirm || m.gerritDialog || m.favoritesDialog || m.settingsDialog || m.inputMode != inputNone {
+		return 0, false
+	}
+
+	lw := m.leftWidth()
+	bodyH := max(8, m.height-4)
+	topH := bodyH
+	if m.width >= 64 {
+		topH = max(8, bodyH*2/3)
+	}
+
+	if x <= 0 || x >= lw-1 || y <= 0 || y >= topH-1 {
+		return 0, false
+	}
+
+	contentRow := y - 1
+	if contentRow == 0 {
+		return 0, false
+	}
+
+	row := contentRow - 1
+	visibleRows := m.repoPanelContentRows()
+	if row < 0 || row >= visibleRows {
+		return 0, false
+	}
+
+	visible := m.visibleRepoIndexes()
+	if len(visible) == 0 {
+		return 0, false
+	}
+	start, end := repoViewportRange(visible, m.repoScroll, visibleRows)
+	if start+row >= end {
+		return 0, false
+	}
+
+	return visible[start+row], true
 }
 
 // leftWidth and rightWidth split the top row with more room for the repo list.
