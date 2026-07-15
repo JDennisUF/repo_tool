@@ -571,6 +571,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			} else {
 				m.status = "Favorites filter disabled"
 			}
+			m.persist()
 		case "F":
 			if idx, ok := m.currentRepoIndex(); ok {
 				repo := m.repos[idx]
