@@ -148,6 +148,7 @@ type Model struct {
 	gerritSearching     bool
 	gerritSearchQuery   string
 	repoMeta            map[string]gitutil.RepoMetadata
+	activeRepoOps       map[string]struct{}
 	settings            store.Settings
 }
 
@@ -201,6 +202,7 @@ func NewModel() Model {
 	m.activeFavoriteList = state.ActiveFavoriteList
 	m.favoritesOnly = state.FavoritesOnly
 	m.settings = state.Settings
+	m.activeRepoOps = map[string]struct{}{}
 	if m.activeFavoriteList == "" {
 		m.activeFavoriteList = defaultFavoriteListName
 	}
@@ -357,6 +359,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case pullFinishedMsg:
 		m.busy = false
+		m.clearActiveRepoOps(msg.results)
 		successes := 0
 		failures := 0
 		for i := range m.repos {
@@ -387,6 +390,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case fetchFinishedMsg:
 		m.busy = false
+		m.clearActiveRepoOps(msg.results)
 		successes := 0
 		failures := 0
 		for i := range m.repos {
@@ -417,6 +421,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case cloneFinishedMsg:
 		m.busy = false
+		m.clearActiveRepoOps(msg.results)
 		successes := 0
 		failures := 0
 		for i := range m.repos {
@@ -1186,11 +1191,12 @@ func (m Model) buildReposContent(width int, rows int) string {
 	updatedW := 5
 	syncW := 7
 	ageW := 5
-	const separatorCount = 7
-	fixedW := 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
+	const separatorCount = 8
+	fixedW := 3 + 3 + 3 + 6 + syncW + updatedW + ageW + separatorCount
 	visible := m.visibleRepoIndexes()
 	nameW, branchW, authorW, opW := m.repoColumnWidths(max(0, contentW-fixedW), visible)
 	header := padCell("Sel", 3) +
+		" " + padCell("Run", 3) +
 		" " + padCell("F", 3) +
 		" " + padCell("Name ("+m.activeFavoriteList+")", nameW) +
 		" " + padCell("St", 6) +
@@ -1247,6 +1253,12 @@ func (m Model) buildReposContent(width int, rows int) string {
 				favStyle = m.fgBgStyle(m.theme.Accent, rowBg).Bold(true)
 				fav = "*"
 			}
+			opMarkerStyle := m.fgBgStyle(m.theme.Muted, rowBg)
+			opMarker := " "
+			if m.repoOpActive(repo) {
+				opMarkerStyle = m.fgBgStyle(m.theme.Warning, rowBg).Bold(true)
+				opMarker = "~"
+			}
 
 			statusStyle := m.fgBgStyle(m.theme.Warning, rowBg).Bold(true)
 			switch status {
@@ -1301,6 +1313,7 @@ func (m Model) buildReposContent(width int, rows int) string {
 				sep = m.bgStyle().Background(lipgloss.Color(rowBg)).Render(" ")
 			}
 			row := selStyle.Render(padCell(sel, 3)) +
+				sep + opMarkerStyle.Render(padCell(opMarker, 3)) +
 				sep + favStyle.Render(padCell(fav, 3)) +
 				sep + nameStyle.Render(padCell(name, nameW)) +
 				sep + statusStyle.Render(padCell(status.Symbol(), 6)) +
@@ -2423,6 +2436,7 @@ func (m Model) confirmDialogTitle() string {
 
 func (m Model) startPull(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.markRepoOpsActive(repos)
 	m.status = fmt.Sprintf("Pulling %d repositories...", len(repos))
 	m.logPullStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
@@ -2431,6 +2445,7 @@ func (m Model) startPull(scope string, repos []store.Repo) (tea.Model, tea.Cmd) 
 
 func (m Model) startFetch(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.markRepoOpsActive(repos)
 	m.status = fmt.Sprintf("Fetching %d repositories...", len(repos))
 	m.logFetchStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
@@ -2439,10 +2454,34 @@ func (m Model) startFetch(scope string, repos []store.Repo) (tea.Model, tea.Cmd)
 
 func (m Model) startClone(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
+	m.markRepoOpsActive(repos)
 	m.status = fmt.Sprintf("Cloning %d repositories...", len(repos))
 	m.logCloneStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
 	return m, cloneSelectedCmd(repos)
+}
+
+func (m *Model) markRepoOpsActive(repos []store.Repo) {
+	if m.activeRepoOps == nil {
+		m.activeRepoOps = map[string]struct{}{}
+	}
+	for _, repo := range repos {
+		m.activeRepoOps[m.repoKey(repo)] = struct{}{}
+	}
+}
+
+func (m *Model) clearActiveRepoOps(results []pullResult) {
+	if len(m.activeRepoOps) == 0 {
+		return
+	}
+	for _, result := range results {
+		delete(m.activeRepoOps, result.path)
+	}
+}
+
+func (m Model) repoOpActive(repo store.Repo) bool {
+	_, ok := m.activeRepoOps[m.repoKey(repo)]
+	return ok
 }
 
 func (m *Model) moveSettingsCursor(delta int) {
@@ -3076,11 +3115,7 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			m.logInfo("Pull: no cloned repositories in favorites list: " + name)
 			return m, nil
 		}
-		m.busy = true
-		m.status = fmt.Sprintf("Pulling %d repositories from favorites list %s...", len(repos), name)
-		m.logPullStart("favorites list "+name, repos)
-		m.scrollToBottom(m.outPanelHeight())
-		return m, pullSelectedCmd(repos)
+		return m.startPull("favorites list "+name, repos)
 	case "x":
 		if name, ok := m.highlightedFavoriteListName(); ok {
 			if len(m.favoriteLists) == 1 {
