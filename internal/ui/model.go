@@ -56,17 +56,25 @@ type pullResult struct {
 	err    error
 }
 
-type pullFinishedMsg struct {
-	results []pullResult
+type repoActionKind string
+
+const (
+	repoActionPull  repoActionKind = "pull"
+	repoActionFetch repoActionKind = "fetch"
+	repoActionClone repoActionKind = "clone"
+)
+
+type repoOpEvent struct {
+	kind   repoActionKind
+	start  bool
+	result pullResult
 }
 
-type fetchFinishedMsg struct {
-	results []pullResult
+type repoOpEventMsg struct {
+	event repoOpEvent
 }
 
-type cloneFinishedMsg struct {
-	results []pullResult
-}
+type repoOpStreamClosedMsg struct{}
 
 type gerritProjectsLoadedMsg struct {
 	projects []string
@@ -149,6 +157,11 @@ type Model struct {
 	gerritSearchQuery   string
 	repoMeta            map[string]gitutil.RepoMetadata
 	activeRepoOps       map[string]struct{}
+	repoOpEvents        chan repoOpEvent
+	repoOpKind          repoActionKind
+	repoOpTotal         int
+	repoOpSuccesses     int
+	repoOpFailures      int
 	settings            store.Settings
 }
 
@@ -357,98 +370,22 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.ensureRepoCursorVisible(m.repoPanelContentRows())
 		return m, nil
 
-	case pullFinishedMsg:
-		m.busy = false
-		m.clearActiveRepoOps(msg.results)
-		successes := 0
-		failures := 0
-		for i := range m.repos {
-			for _, r := range msg.results {
-				if m.repoKey(m.repos[i]) != r.path {
-					continue
-				}
-				if r.err != nil {
-					m.repos[i].LastOp = "pull failed"
-					failures++
-					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
-				} else {
-					m.refreshRepoStatus(m.repos[i])
-					newCount := m.syncRemoteBranchTracking(i)
-					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("pull ok", newCount)
-					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
-					successes++
-					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
-				}
+	case repoOpEventMsg:
+		if msg.event.start {
+			if m.activeRepoOps == nil {
+				m.activeRepoOps = map[string]struct{}{}
 			}
+			m.activeRepoOps[msg.event.result.path] = struct{}{}
+		} else {
+			m.finishRepoOp(msg.event.kind, msg.event.result)
 		}
-		m.persist()
-		summary := fmt.Sprintf("Pull complete: %d ok, %d failed", successes, failures)
-		m.status = summary
-		m.logInfo("--- " + summary + " ---")
-		m.scrollToBottom(m.outPanelHeight())
+		if m.repoOpEvents != nil {
+			return m, waitForRepoOpEvent(m.repoOpEvents)
+		}
 		return m, nil
 
-	case fetchFinishedMsg:
-		m.busy = false
-		m.clearActiveRepoOps(msg.results)
-		successes := 0
-		failures := 0
-		for i := range m.repos {
-			for _, r := range msg.results {
-				if m.repoKey(m.repos[i]) != r.path {
-					continue
-				}
-				if r.err != nil {
-					m.repos[i].LastOp = "fetch failed"
-					failures++
-					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
-				} else {
-					m.refreshRepoStatus(m.repos[i])
-					newCount := m.syncRemoteBranchTracking(i)
-					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("fetch ok", newCount)
-					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
-					successes++
-					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
-				}
-			}
-		}
-		m.persist()
-		summary := fmt.Sprintf("Fetch complete: %d ok, %d failed", successes, failures)
-		m.status = summary
-		m.logInfo("--- " + summary + " ---")
-		m.scrollToBottom(m.outPanelHeight())
-		return m, nil
-
-	case cloneFinishedMsg:
-		m.busy = false
-		m.clearActiveRepoOps(msg.results)
-		successes := 0
-		failures := 0
-		for i := range m.repos {
-			for _, r := range msg.results {
-				if m.repoKey(m.repos[i]) != r.path {
-					continue
-				}
-				if r.err != nil {
-					m.repos[i].LastOp = "clone failed"
-					failures++
-					m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, r.output))
-				} else {
-					m.repos[i].LastOp = "clone ok"
-					m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
-					successes++
-					m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, r.output))
-					m.refreshRepoStatus(m.repos[i])
-					newCount := m.syncRemoteBranchTracking(i)
-					m.repos[i].LastOp = formatOpWithRemoteBranchDelta("clone ok", newCount)
-				}
-			}
-		}
-		m.persist()
-		summary := fmt.Sprintf("Clone complete: %d ok, %d failed", successes, failures)
-		m.status = summary
-		m.logInfo("--- " + summary + " ---")
-		m.scrollToBottom(m.outPanelHeight())
+	case repoOpStreamClosedMsg:
+		m.finishRepoOpBatch()
 		return m, nil
 
 	case gerritProjectsLoadedMsg:
@@ -2436,46 +2373,39 @@ func (m Model) confirmDialogTitle() string {
 
 func (m Model) startPull(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
-	m.markRepoOpsActive(repos)
+	m.startRepoOpBatch(repoActionPull, len(repos))
 	m.status = fmt.Sprintf("Pulling %d repositories...", len(repos))
 	m.logPullStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
-	return m, pullSelectedCmd(repos)
+	return m, tea.Batch(runRepoOpBatchCmd(repoActionPull, repos, m.repoOpEvents), waitForRepoOpEvent(m.repoOpEvents))
 }
 
 func (m Model) startFetch(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
-	m.markRepoOpsActive(repos)
+	m.startRepoOpBatch(repoActionFetch, len(repos))
 	m.status = fmt.Sprintf("Fetching %d repositories...", len(repos))
 	m.logFetchStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
-	return m, fetchSelectedCmd(repos)
+	return m, tea.Batch(runRepoOpBatchCmd(repoActionFetch, repos, m.repoOpEvents), waitForRepoOpEvent(m.repoOpEvents))
 }
 
 func (m Model) startClone(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
 	m.busy = true
-	m.markRepoOpsActive(repos)
+	m.startRepoOpBatch(repoActionClone, len(repos))
 	m.status = fmt.Sprintf("Cloning %d repositories...", len(repos))
 	m.logCloneStart(scope, repos)
 	m.scrollToBottom(m.outPanelHeight())
-	return m, cloneSelectedCmd(repos)
+	return m, tea.Batch(runRepoOpBatchCmd(repoActionClone, repos, m.repoOpEvents), waitForRepoOpEvent(m.repoOpEvents))
 }
 
-func (m *Model) markRepoOpsActive(repos []store.Repo) {
+func (m *Model) startRepoOpBatch(kind repoActionKind, total int) {
+	m.repoOpKind = kind
+	m.repoOpTotal = total
+	m.repoOpSuccesses = 0
+	m.repoOpFailures = 0
+	m.repoOpEvents = make(chan repoOpEvent, max(1, total*2))
 	if m.activeRepoOps == nil {
 		m.activeRepoOps = map[string]struct{}{}
-	}
-	for _, repo := range repos {
-		m.activeRepoOps[m.repoKey(repo)] = struct{}{}
-	}
-}
-
-func (m *Model) clearActiveRepoOps(results []pullResult) {
-	if len(m.activeRepoOps) == 0 {
-		return
-	}
-	for _, result := range results {
-		delete(m.activeRepoOps, result.path)
 	}
 }
 
@@ -2484,9 +2414,88 @@ func (m Model) repoOpActive(repo store.Repo) bool {
 	return ok
 }
 
+func (m *Model) finishRepoOp(kind repoActionKind, result pullResult) {
+	delete(m.activeRepoOps, result.path)
+	for i := range m.repos {
+		if m.repoKey(m.repos[i]) != result.path {
+			continue
+		}
+		switch kind {
+		case repoActionPull:
+			if result.err != nil {
+				m.repos[i].LastOp = "pull failed"
+				m.repoOpFailures++
+				m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, result.output))
+			} else {
+				m.refreshRepoStatus(m.repos[i])
+				newCount := m.syncRemoteBranchTracking(i)
+				m.repos[i].LastOp = formatOpWithRemoteBranchDelta("pull ok", newCount)
+				m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
+				m.repoOpSuccesses++
+				m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, result.output))
+			}
+		case repoActionFetch:
+			if result.err != nil {
+				m.repos[i].LastOp = "fetch failed"
+				m.repoOpFailures++
+				m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, result.output))
+			} else {
+				m.refreshRepoStatus(m.repos[i])
+				newCount := m.syncRemoteBranchTracking(i)
+				m.repos[i].LastOp = formatOpWithRemoteBranchDelta("fetch ok", newCount)
+				m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
+				m.repoOpSuccesses++
+				m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, result.output))
+			}
+		case repoActionClone:
+			if result.err != nil {
+				m.repos[i].LastOp = "clone failed"
+				m.repoOpFailures++
+				m.logError(fmt.Sprintf("[%s] FAIL: %s", m.repos[i].Name, result.output))
+			} else {
+				m.repos[i].LastOp = "clone ok"
+				m.repos[i].LastUpdated = time.Now().Format(time.RFC3339)
+				m.repoOpSuccesses++
+				m.logSuccess(fmt.Sprintf("[%s] OK: %s", m.repos[i].Name, result.output))
+				m.refreshRepoStatus(m.repos[i])
+				newCount := m.syncRemoteBranchTracking(i)
+				m.repos[i].LastOp = formatOpWithRemoteBranchDelta("clone ok", newCount)
+			}
+		}
+		break
+	}
+}
+
+func (m *Model) finishRepoOpBatch() {
+	m.busy = false
+	m.repoOpEvents = nil
+	m.persist()
+	summary := fmt.Sprintf("%s complete: %d ok, %d failed", repoActionLabel(m.repoOpKind), m.repoOpSuccesses, m.repoOpFailures)
+	m.status = summary
+	m.logInfo("--- " + summary + " ---")
+	m.scrollToBottom(m.outPanelHeight())
+	m.repoOpKind = ""
+	m.repoOpTotal = 0
+	m.repoOpSuccesses = 0
+	m.repoOpFailures = 0
+}
+
 func (m *Model) moveSettingsCursor(delta int) {
 	const settingsCount = 6
 	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
+}
+
+func repoActionLabel(kind repoActionKind) string {
+	switch kind {
+	case repoActionPull:
+		return "Pull"
+	case repoActionFetch:
+		return "Fetch"
+	case repoActionClone:
+		return "Clone"
+	default:
+		return "Action"
+	}
 }
 
 func (m *Model) toggleCurrentSetting() {
@@ -3515,87 +3524,67 @@ func (m *Model) logCloneStart(scope string, repos []store.Repo) {
 	}
 }
 
-func pullSelectedCmd(repos []store.Repo) tea.Cmd {
+func runRepoOpBatchCmd(kind repoActionKind, repos []store.Repo, events chan repoOpEvent) tea.Cmd {
 	return func() tea.Msg {
-		const maxWorkers = 4
-		sem := make(chan struct{}, maxWorkers)
-		results := make([]pullResult, len(repos))
-		var wg sync.WaitGroup
+		go func() {
+			const maxWorkers = 4
+			sem := make(chan struct{}, maxWorkers)
+			var wg sync.WaitGroup
 
-		for i := range repos {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
+			for i := range repos {
+				wg.Add(1)
+				go func(repo store.Repo) {
+					defer wg.Done()
+					sem <- struct{}{}
+					events <- repoOpEvent{
+						kind:  kind,
+						start: true,
+						result: pullResult{
+							path: store.RepoKey(repo),
+						},
+					}
 
-				out, err := gitutil.Pull(repos[i].Path)
-				results[i] = pullResult{
-					path:   store.RepoKey(repos[i]),
-					output: out,
-					err:    err,
-				}
-			}(i)
-		}
+					var (
+						out string
+						err error
+					)
+					switch kind {
+					case repoActionPull:
+						out, err = gitutil.Pull(repo.Path)
+					case repoActionFetch:
+						out, err = gitutil.Fetch(repo.Path)
+					case repoActionClone:
+						out, err = gitutil.Clone(repo.RemoteURL, repo.Path)
+					default:
+						err = fmt.Errorf("unknown repo action: %s", kind)
+					}
 
-		wg.Wait()
-		return pullFinishedMsg{results: results}
+					<-sem
+					events <- repoOpEvent{
+						kind: kind,
+						result: pullResult{
+							path:   store.RepoKey(repo),
+							output: out,
+							err:    err,
+						},
+					}
+				}(repos[i])
+			}
+
+			wg.Wait()
+			close(events)
+		}()
+		return nil
 	}
 }
 
-func fetchSelectedCmd(repos []store.Repo) tea.Cmd {
+func waitForRepoOpEvent(events chan repoOpEvent) tea.Cmd {
 	return func() tea.Msg {
-		const maxWorkers = 4
-		sem := make(chan struct{}, maxWorkers)
-		results := make([]pullResult, len(repos))
-		var wg sync.WaitGroup
-
-		for i := range repos {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				out, err := gitutil.Fetch(repos[i].Path)
-				results[i] = pullResult{
-					path:   store.RepoKey(repos[i]),
-					output: out,
-					err:    err,
-				}
-			}(i)
+		event, ok := <-events
+		if !ok {
+			return repoOpStreamClosedMsg{}
 		}
-
-		wg.Wait()
-		return fetchFinishedMsg{results: results}
-	}
-}
-
-func cloneSelectedCmd(repos []store.Repo) tea.Cmd {
-	return func() tea.Msg {
-		const maxWorkers = 4
-		sem := make(chan struct{}, maxWorkers)
-		results := make([]pullResult, len(repos))
-		var wg sync.WaitGroup
-
-		for i := range repos {
-			wg.Add(1)
-			go func(i int) {
-				defer wg.Done()
-				sem <- struct{}{}
-				defer func() { <-sem }()
-
-				out, err := gitutil.Clone(repos[i].RemoteURL, repos[i].Path)
-				results[i] = pullResult{
-					path:   store.RepoKey(repos[i]),
-					output: out,
-					err:    err,
-				}
-			}(i)
-		}
-
-		wg.Wait()
-		return cloneFinishedMsg{results: results}
+		return repoOpEventMsg{event: event}
 	}
 }
 

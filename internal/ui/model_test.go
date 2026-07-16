@@ -52,9 +52,13 @@ func TestPullFinishedClearsActiveRepoMarkers(t *testing.T) {
 		theme:    themes.Themes[themes.Active],
 	}
 
-	updated, _ := m.Update(pullFinishedMsg{
-		results: []pullResult{
-			{path: "/tmp/repo-one", output: "ok"},
+	updated, _ := m.Update(repoOpEventMsg{
+		event: repoOpEvent{
+			kind: repoActionPull,
+			result: pullResult{
+				path:   "/tmp/repo-one",
+				output: "ok",
+			},
 		},
 	})
 	got := updated.(Model)
