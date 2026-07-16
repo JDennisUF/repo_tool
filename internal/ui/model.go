@@ -135,9 +135,10 @@ type Model struct {
 	favoritesDialog     bool
 	favoritesDialogMode favoritesDialogMode
 	favoritesListCursor int
-	deleteConfirm       bool
-	deleteConfirmRepo   store.Repo
-	deleteConfirmLists  []string
+	confirmDialog       bool
+	confirmAction       confirmAction
+	confirmRepos        []store.Repo
+	confirmLists        []string
 	gerritDialog        bool
 	gerritLoading       bool
 	gerritProjects      []string
@@ -155,6 +156,16 @@ type favoritesDialogMode int
 const (
 	favoritesDialogSelect favoritesDialogMode = iota
 	favoritesDialogCreate
+)
+
+type confirmAction int
+
+const (
+	confirmActionNone confirmAction = iota
+	confirmActionPull
+	confirmActionFetch
+	confirmActionClone
+	confirmActionRemove
 )
 
 func NewModel() Model {
@@ -493,7 +504,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.gerritDialog {
 			return m.handleGerritDialog(msg)
 		}
-		if m.deleteConfirm {
+		if m.confirmDialog {
 			return m.handleDeleteConfirm(msg)
 		}
 		if m.favoritesDialog {
@@ -676,11 +687,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				targets = []store.Repo{m.repos[idx]}
 				scope = "highlighted repository"
 			}
-			m.busy = true
-			m.status = fmt.Sprintf("Fetching %d repositories...", len(targets))
-			m.logFetchStart(scope, targets)
-			m.scrollToBottom(m.outPanelHeight())
-			return m, fetchSelectedCmd(targets)
+			if len(targets) > 1 {
+				m.openConfirmDialog(confirmActionFetch, targets)
+				return m, nil
+			}
+			return m.startFetch(scope, targets)
 		case "c":
 			if m.busy {
 				m.status = "Busy running clone"
@@ -703,11 +714,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				targets = []store.Repo{target}
 				scope = "highlighted repository"
 			}
-			m.busy = true
-			m.status = fmt.Sprintf("Cloning %d repositories...", len(targets))
-			m.logCloneStart(scope, targets)
-			m.scrollToBottom(m.outPanelHeight())
-			return m, cloneSelectedCmd(targets)
+			if len(targets) > 1 {
+				m.openConfirmDialog(confirmActionClone, targets)
+				return m, nil
+			}
+			return m.startClone(scope, targets)
 		case "T":
 			m.openThemeSelector()
 		case "g":
@@ -767,23 +778,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selected = []store.Repo{m.repos[idx]}
 				scope = "highlighted repository"
 			}
-			m.busy = true
-			m.status = fmt.Sprintf("Pulling %d repositories...", len(selected))
-			m.logPullStart(scope, selected)
-			m.scrollToBottom(m.outPanelHeight())
-			return m, pullSelectedCmd(selected)
-		case "x":
-			idx, ok := m.currentRepoIndex()
-			if !ok {
+			if len(selected) > 1 {
+				m.openConfirmDialog(confirmActionPull, selected)
 				return m, nil
 			}
-			repo := m.repos[idx]
-			lists := m.favoriteListsContaining(m.repoKey(repo))
-			if len(lists) > 0 {
-				m.deleteConfirm = true
-				m.deleteConfirmRepo = repo
-				m.deleteConfirmLists = lists
-				m.status = fmt.Sprintf("Confirm delete: %s", repo.Name)
+			return m.startPull(scope, selected)
+		case "x":
+			targets := selectedRepos(m.repos)
+			if len(targets) == 0 {
+				idx, ok := m.currentRepoIndex()
+				if !ok {
+					return m, nil
+				}
+				targets = []store.Repo{m.repos[idx]}
+			}
+			if len(targets) > 1 {
+				m.openConfirmDialog(confirmActionRemove, targets)
+				return m, nil
+			}
+			repo := targets[0]
+			if lists := m.favoriteListsContaining(m.repoKey(repo)); len(lists) > 0 {
+				m.openConfirmDialog(confirmActionRemove, targets)
 				return m, nil
 			}
 			m.removeTrackedRepo(repo)
@@ -895,7 +910,7 @@ func (m *Model) repoPanelContentRows() int {
 }
 
 func (m Model) repoIndexAt(x int, y int) (int, bool) {
-	if m.outputMaximized || m.showHelp || m.deleteConfirm || m.gerritDialog || m.favoritesDialog || m.settingsDialog || m.inputMode != inputNone {
+	if m.outputMaximized || m.showHelp || m.confirmDialog || m.gerritDialog || m.favoritesDialog || m.settingsDialog || m.inputMode != inputNone {
 		return 0, false
 	}
 
@@ -1413,7 +1428,7 @@ func (m Model) View() string {
 		if m.showHelp {
 			body = m.renderHelpOverlay(body)
 		}
-		if m.deleteConfirm {
+		if m.confirmDialog {
 			body = m.renderDeleteConfirmDialog(body)
 		}
 		if m.gerritDialog {
@@ -1484,7 +1499,7 @@ func (m Model) View() string {
 	if m.showHelp {
 		body = m.renderHelpOverlay(body)
 	}
-	if m.deleteConfirm {
+	if m.confirmDialog {
 		body = m.renderDeleteConfirmDialog(body)
 	}
 	if m.gerritDialog {
@@ -1685,7 +1700,7 @@ func (m Model) renderDeleteConfirmDialog(base string) string {
 	screenH := max(1, m.height-2)
 	dialogW := min(max(44, screenW-8), 84)
 	dialogH := min(max(12, screenH-6), 22)
-	dialog := m.renderSection(-1, "Confirm Remove", m.deleteConfirmView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
+	dialog := m.renderSection(-1, m.confirmDialogTitle(), m.deleteConfirmView(max(1, dialogW-4), max(1, dialogH-2)), dialogW, dialogH, true)
 
 	top := max(0, (screenH-dialogH)/2)
 	left := max(0, (screenW-dialogW)/2)
@@ -1830,22 +1845,42 @@ func (m Model) gerritDialogView(width int, rows int) string {
 }
 
 func (m Model) deleteConfirmView(width int, rows int) string {
+	if len(m.confirmRepos) == 0 {
+		return ""
+	}
+
 	lines := []string{
-		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=remove  Esc=cancel", width)),
+		m.fgStyle(m.theme.Muted).Render(trimRight("Enter=confirm  Esc=cancel", width)),
 		"",
-		m.labelValue("Repo", m.deleteConfirmRepo.Name, width),
-		m.labelValue("Path", fallbackValue(m.deleteConfirmRepo.Path, "none"), width),
-		m.labelValue("Project", fallbackValue(m.deleteConfirmRepo.GerritProject, "none"), width),
-		"",
-		m.fgStyle(m.theme.Warning).Bold(true).Render(trimRight("This repo is in these favorites lists:", width)),
 	}
-	for _, name := range m.deleteConfirmLists {
-		lines = append(lines, m.labelValue("", name, width))
+
+	if len(m.confirmRepos) == 1 {
+		repo := m.confirmRepos[0]
+		lines = append(lines,
+			m.labelValue("Repo", repo.Name, width),
+			m.labelValue("Path", fallbackValue(repo.Path, "none"), width),
+			m.labelValue("Project", fallbackValue(repo.GerritProject, "none"), width),
+		)
+	} else {
+		lines = append(lines, m.labelValue("Repos", fmt.Sprintf("%d", len(m.confirmRepos)), width))
+		maxNames := max(1, rows-7)
+		limit := min(len(m.confirmRepos), maxNames)
+		for i := 0; i < limit; i++ {
+			lines = append(lines, m.labelValue("", m.confirmRepos[i].Name, width))
+		}
+		if limit < len(m.confirmRepos) {
+			lines = append(lines, m.labelValue("", fmt.Sprintf("... and %d more", len(m.confirmRepos)-limit), width))
+		}
 	}
-	lines = append(lines,
-		"",
-		m.fgStyle(m.theme.Muted).Render(trimRight("Removing will stop tracking the repo and remove it from all favorites lists above.", width)),
-	)
+
+	if m.confirmAction == confirmActionRemove && len(m.confirmLists) > 0 {
+		lines = append(lines, "", m.fgStyle(m.theme.Warning).Bold(true).Render(trimRight("This will remove repos from these favorites lists:", width)))
+		for _, name := range m.confirmLists {
+			lines = append(lines, m.labelValue("", name, width))
+		}
+		lines = append(lines, "", m.fgStyle(m.theme.Muted).Render(trimRight("Removing will stop tracking the repo and remove it from all favorites lists above.", width)))
+	}
+
 	return strings.Join(limitLines(lines, rows), "\n")
 }
 
@@ -1923,7 +1958,7 @@ func (m Model) helpView(width int) string {
 		"  A               Clear all",
 		"",
 		"Repo Actions",
-		"  c               Clone tracked Gerrit repo(s)",
+		"  c               Clone Gerrit repos",
 		"  g               Load Gerrit projects",
 		"  h               Fetch",
 		"  o               Add repo",
@@ -2317,18 +2352,97 @@ func (m Model) handleDeleteConfirm(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "ctrl+c":
 		return m, tea.Quit
 	case "esc":
-		m.deleteConfirm = false
-		m.deleteConfirmRepo = store.Repo{}
-		m.deleteConfirmLists = nil
-		m.status = "Canceled repo removal"
+		m.confirmDialog = false
+		m.confirmAction = confirmActionNone
+		m.confirmRepos = nil
+		m.confirmLists = nil
+		m.status = "Canceled action"
 	case "enter":
-		repo := m.deleteConfirmRepo
-		m.deleteConfirm = false
-		m.deleteConfirmRepo = store.Repo{}
-		m.deleteConfirmLists = nil
-		m.removeTrackedRepo(repo)
+		action := m.confirmAction
+		repos := append([]store.Repo(nil), m.confirmRepos...)
+		m.confirmDialog = false
+		m.confirmAction = confirmActionNone
+		m.confirmRepos = nil
+		m.confirmLists = nil
+		switch action {
+		case confirmActionPull:
+			return m.startPull("selected repositories", repos)
+		case confirmActionFetch:
+			return m.startFetch("selected repositories", repos)
+		case confirmActionClone:
+			return m.startClone("selected repositories", repos)
+		case confirmActionRemove:
+			m.removeTrackedRepos(repos)
+		}
 	}
 	return m, nil
+}
+
+func (m *Model) openConfirmDialog(action confirmAction, repos []store.Repo) {
+	m.confirmDialog = true
+	m.confirmAction = action
+	m.confirmRepos = append([]store.Repo(nil), repos...)
+	m.confirmLists = nil
+	if action == confirmActionRemove {
+		seen := map[string]struct{}{}
+		for _, repo := range repos {
+			for _, name := range m.favoriteListsContaining(m.repoKey(repo)) {
+				if _, ok := seen[name]; ok {
+					continue
+				}
+				seen[name] = struct{}{}
+				m.confirmLists = append(m.confirmLists, name)
+			}
+		}
+		sort.Strings(m.confirmLists)
+	}
+	switch action {
+	case confirmActionPull:
+		m.status = fmt.Sprintf("Confirm pull: %d repos", len(repos))
+	case confirmActionFetch:
+		m.status = fmt.Sprintf("Confirm fetch: %d repos", len(repos))
+	case confirmActionClone:
+		m.status = fmt.Sprintf("Confirm clone: %d repos", len(repos))
+	case confirmActionRemove:
+		m.status = fmt.Sprintf("Confirm remove: %d repos", len(repos))
+	}
+}
+
+func (m Model) confirmDialogTitle() string {
+	switch m.confirmAction {
+	case confirmActionPull:
+		return "Confirm Pull"
+	case confirmActionFetch:
+		return "Confirm Fetch"
+	case confirmActionClone:
+		return "Confirm Clone"
+	default:
+		return "Confirm Remove"
+	}
+}
+
+func (m Model) startPull(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
+	m.busy = true
+	m.status = fmt.Sprintf("Pulling %d repositories...", len(repos))
+	m.logPullStart(scope, repos)
+	m.scrollToBottom(m.outPanelHeight())
+	return m, pullSelectedCmd(repos)
+}
+
+func (m Model) startFetch(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
+	m.busy = true
+	m.status = fmt.Sprintf("Fetching %d repositories...", len(repos))
+	m.logFetchStart(scope, repos)
+	m.scrollToBottom(m.outPanelHeight())
+	return m, fetchSelectedCmd(repos)
+}
+
+func (m Model) startClone(scope string, repos []store.Repo) (tea.Model, tea.Cmd) {
+	m.busy = true
+	m.status = fmt.Sprintf("Cloning %d repositories...", len(repos))
+	m.logCloneStart(scope, repos)
+	m.scrollToBottom(m.outPanelHeight())
+	return m, cloneSelectedCmd(repos)
 }
 
 func (m *Model) moveSettingsCursor(delta int) {
@@ -2681,21 +2795,34 @@ func (m Model) favoriteListsContaining(path string) []string {
 }
 
 func (m *Model) removeTrackedRepo(repo store.Repo) {
-	key := m.repoKey(repo)
-	for i := range m.repos {
-		if m.repoKey(m.repos[i]) != key {
-			continue
-		}
-		m.repos = append(m.repos[:i], m.repos[i+1:]...)
-		break
+	m.removeTrackedRepos([]store.Repo{repo})
+}
+
+func (m *Model) removeTrackedRepos(repos []store.Repo) {
+	if len(repos) == 0 {
+		return
 	}
-	m.removeRepoFromFavorites(key)
-	delete(m.repoMeta, key)
+	for _, repo := range repos {
+		key := m.repoKey(repo)
+		for i := range m.repos {
+			if m.repoKey(m.repos[i]) != key {
+				continue
+			}
+			m.repos = append(m.repos[:i], m.repos[i+1:]...)
+			break
+		}
+		m.removeRepoFromFavorites(key)
+		delete(m.repoMeta, key)
+		m.logInfo(fmt.Sprintf("removed: %s (%s)", repo.Name, fallbackValue(repo.Path, repo.GerritProject)))
+	}
 	m.normalizeCursor()
 	m.ensureRepoCursorVisible(m.repoPanelContentRows())
 	m.persist()
-	m.status = fmt.Sprintf("Removed: %s", repo.Name)
-	m.logInfo(fmt.Sprintf("removed: %s (%s)", repo.Name, fallbackValue(repo.Path, repo.GerritProject)))
+	if len(repos) == 1 {
+		m.status = fmt.Sprintf("Removed: %s", repos[0].Name)
+		return
+	}
+	m.status = fmt.Sprintf("Removed %d repositories", len(repos))
 }
 
 func (m Model) visibleRepoIndexes() []int {

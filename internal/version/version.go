@@ -17,5 +17,5 @@ func Build() string {
 }
 
 func Label() string {
-	return "build " + Build()
+	return "Repo Tool build " + Build()
 }
