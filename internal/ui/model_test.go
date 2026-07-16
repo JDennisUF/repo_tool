@@ -67,3 +67,28 @@ func TestPullFinishedClearsActiveRepoMarkers(t *testing.T) {
 		t.Fatalf("expected active repo marker to clear after pull finishes")
 	}
 }
+
+func TestCycleLayoutModeCyclesThroughThreeStates(t *testing.T) {
+	m := NewModel()
+
+	m.cycleLayoutMode()
+	if m.layoutMode != layoutOutputMaximized {
+		t.Fatalf("first cycle layoutMode = %v, want %v", m.layoutMode, layoutOutputMaximized)
+	}
+	if m.focus != focusOutput {
+		t.Fatalf("first cycle focus = %v, want %v", m.focus, focusOutput)
+	}
+
+	m.cycleLayoutMode()
+	if m.layoutMode != layoutReposMaximized {
+		t.Fatalf("second cycle layoutMode = %v, want %v", m.layoutMode, layoutReposMaximized)
+	}
+	if m.focus != focusRepos {
+		t.Fatalf("second cycle focus = %v, want %v", m.focus, focusRepos)
+	}
+
+	m.cycleLayoutMode()
+	if m.layoutMode != layoutNormal {
+		t.Fatalf("third cycle layoutMode = %v, want %v", m.layoutMode, layoutNormal)
+	}
+}

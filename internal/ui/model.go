@@ -50,6 +50,14 @@ const (
 	searchScopeOutput
 )
 
+type layoutMode int
+
+const (
+	layoutNormal layoutMode = iota
+	layoutOutputMaximized
+	layoutReposMaximized
+)
+
 type pullResult struct {
 	path   string
 	output string
@@ -115,7 +123,7 @@ type Model struct {
 	settingsCursor  int
 	settingsDraft   store.Settings
 	settingsEditing bool
-	outputMaximized bool
+	layoutMode      layoutMode
 
 	// output panel
 	output    []outputLine
@@ -292,7 +300,7 @@ func (m Model) currentSearchScope() searchScope {
 	if m.themeSelecting {
 		return searchScopeThemes
 	}
-	if m.focus == focusOutput || m.outputMaximized {
+	if m.focus == focusOutput || m.layoutMode == layoutOutputMaximized {
 		return searchScopeOutput
 	}
 	return searchScopeRepos
@@ -508,7 +516,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			}
 		case "enter":
 			if m.focus == focusRepos || m.focus == focusOutput {
-				m.toggleOutputMaximized()
+				m.cycleLayoutMode()
 			}
 		case " ":
 			if idx, ok := m.currentRepoIndex(); ok {
@@ -824,8 +832,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 // outPanelHeight returns how many output lines are visible given current terminal height.
 func (m *Model) outPanelHeight() int {
 	bodyH := max(8, m.height-4)
-	if m.outputMaximized {
+	if m.layoutMode == layoutOutputMaximized {
 		return max(1, bodyH-4)
+	}
+	if m.layoutMode == layoutReposMaximized {
+		return 0
 	}
 	if m.width < 64 {
 		return max(1, bodyH-4)
@@ -837,6 +848,16 @@ func (m *Model) outPanelHeight() int {
 
 func (m *Model) repoPanelContentRows() int {
 	bodyH := max(8, m.height-4)
+	if m.layoutMode == layoutReposMaximized {
+		rows := max(1, bodyH-2)
+		if m.inputMode != inputNone {
+			rows -= 3
+		}
+		if rows < 1 {
+			rows = 1
+		}
+		return rows - 1
+	}
 	topH := bodyH
 	if m.width >= 64 {
 		topH = max(8, bodyH*2/3)
@@ -852,14 +873,14 @@ func (m *Model) repoPanelContentRows() int {
 }
 
 func (m Model) repoIndexAt(x int, y int) (int, bool) {
-	if m.outputMaximized || m.showHelp || m.confirmDialog || m.gerritDialog || m.favoritesDialog || m.settingsDialog || m.inputMode != inputNone {
+	if m.layoutMode == layoutOutputMaximized || m.showHelp || m.confirmDialog || m.gerritDialog || m.favoritesDialog || m.settingsDialog || m.inputMode != inputNone {
 		return 0, false
 	}
 
 	lw := m.leftWidth()
 	bodyH := max(8, m.height-4)
 	topH := bodyH
-	if m.width >= 64 {
+	if m.layoutMode != layoutReposMaximized && m.width >= 64 {
 		topH = max(8, bodyH*2/3)
 	}
 
@@ -1372,7 +1393,7 @@ func (m Model) View() string {
 	lw := m.leftWidth()
 	rw := m.rightWidth()
 	bodyH := max(8, m.height-4)
-	if m.outputMaximized {
+	if m.layoutMode == layoutOutputMaximized {
 		outputPanel := m.renderSection(1, m.titleWithSearch("Command Output", m.outputSearchQuery), m.buildOutputContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusOutput)
 		body := outputPanel
 		if m.showHelp {
@@ -1402,7 +1423,40 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
+	}
+	if m.layoutMode == layoutReposMaximized {
+		leftPanel := m.renderSectionWithMeta(0, m.titleWithSearch("Repos", m.repoSearchQuery), version.Label(), m.buildReposContent(max(1, m.width-2), max(1, bodyH-2)), m.width, bodyH, m.focus == focusRepos)
+		body := leftPanel
+		if m.showHelp {
+			body = m.renderHelpOverlay(body)
+		}
+		if m.confirmDialog {
+			body = m.renderDeleteConfirmDialog(body)
+		}
+		if m.gerritDialog {
+			body = m.renderGerritDialog(body)
+		}
+		if m.favoritesDialog {
+			body = m.renderFavoritesDialog(body)
+		}
+		if m.settingsDialog {
+			body = m.renderSettingsDialog(body)
+		}
+
+		busy := "idle"
+		if m.busy {
+			busy = "busy"
+		}
+		status := lipgloss.NewStyle().
+			Foreground(lipgloss.Color(m.theme.StatusText)).
+			Background(lipgloss.Color(m.theme.Status)).
+			Width(max(1, m.width)).
+			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
+		keys := m.fgStyle(m.theme.Muted).
+			Width(max(1, m.width)).
+			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -1474,7 +1528,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1] focus  /=search  Enter=max output  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -2671,14 +2725,20 @@ func (m *Model) toggleShowRepoInfo() {
 	}
 }
 
-func (m *Model) toggleOutputMaximized() {
-	m.outputMaximized = !m.outputMaximized
-	if m.outputMaximized {
+func (m *Model) cycleLayoutMode() {
+	switch m.layoutMode {
+	case layoutNormal:
+		m.layoutMode = layoutOutputMaximized
 		m.focus = focusOutput
 		m.status = "Maximized command output"
-		return
+	case layoutOutputMaximized:
+		m.layoutMode = layoutReposMaximized
+		m.focus = focusRepos
+		m.status = "Maximized repos list"
+	default:
+		m.layoutMode = layoutNormal
+		m.status = "Normal layout"
 	}
-	m.status = "Normal command output"
 }
 
 func (m *Model) closeSearchMode(cancel bool) {
