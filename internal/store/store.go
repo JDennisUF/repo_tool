@@ -35,12 +35,13 @@ type State struct {
 }
 
 type Settings struct {
-	ShowGitCommands  bool   `json:"showGitCommands"`
-	ShowRepoInfo     bool   `json:"showRepoInfo"`
-	BulkConfirmation bool   `json:"bulkConfirmation"`
-	GerritUsername   string `json:"gerritUsername,omitempty"`
-	GerritServer     string `json:"gerritServer,omitempty"`
-	BaseGitDir       string `json:"baseGitDir,omitempty"`
+	ShowGitCommands      bool   `json:"showGitCommands"`
+	ShowRepoInfo         bool   `json:"showRepoInfo"`
+	BulkConfirmation     bool   `json:"bulkConfirmation"`
+	OpenShellInNewWindow bool   `json:"openShellInNewWindow"`
+	GerritUsername       string `json:"gerritUsername,omitempty"`
+	GerritServer         string `json:"gerritServer,omitempty"`
+	BaseGitDir           string `json:"baseGitDir,omitempty"`
 }
 
 type Store struct {
@@ -73,6 +74,9 @@ func (s *Store) Load() (State, error) {
 	}
 	if !strings.Contains(string(data), "\"bulkConfirmation\"") {
 		state.Settings.BulkConfirmation = true
+	}
+	if !strings.Contains(string(data), "\"openShellInNewWindow\"") {
+		state.Settings.OpenShellInNewWindow = true
 	}
 
 	normalizedRepos := make([]Repo, 0, len(state.Repos))
@@ -189,8 +193,9 @@ func defaultState() State {
 		FavoriteLists:      map[string][]string{defaultFavoriteListName: []string{}},
 		ActiveFavoriteList: defaultFavoriteListName,
 		Settings: Settings{
-			ShowRepoInfo:     true,
-			BulkConfirmation: true,
+			ShowRepoInfo:         true,
+			BulkConfirmation:     true,
+			OpenShellInNewWindow: true,
 		},
 	}
 }

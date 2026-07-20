@@ -50,6 +50,9 @@ func TestLoadMigratesLegacyRepoState(t *testing.T) {
 	if !state.Settings.BulkConfirmation {
 		t.Fatal("bulk confirmation should default to true for legacy state")
 	}
+	if !state.Settings.OpenShellInNewWindow {
+		t.Fatal("open shell in new window should default to true for legacy state")
+	}
 	if state.Settings.GerritUsername != "" || state.Settings.GerritServer != "" || state.Settings.BaseGitDir != "" {
 		t.Fatalf("unexpected gerrit settings in legacy state: %+v", state.Settings)
 	}
@@ -74,12 +77,13 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 		ActiveFavoriteList: "work",
 		FavoritesOnly:      true,
 		Settings: Settings{
-			ShowGitCommands:  true,
-			ShowRepoInfo:     true,
-			BulkConfirmation: true,
-			GerritUsername:   "alice",
-			GerritServer:     "gerrit.example.com",
-			BaseGitDir:       "/tmp/git",
+			ShowGitCommands:      true,
+			ShowRepoInfo:         true,
+			BulkConfirmation:     true,
+			OpenShellInNewWindow: true,
+			GerritUsername:       "alice",
+			GerritServer:         "gerrit.example.com",
+			BaseGitDir:           "/tmp/git",
 		},
 	}
 	if err := s.Save(in); err != nil {
@@ -137,6 +141,9 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	if !out.Settings.BulkConfirmation {
 		t.Fatal("bulk confirmation should persist")
 	}
+	if !out.Settings.OpenShellInNewWindow {
+		t.Fatal("open shell in new window should persist")
+	}
 	if out.Settings.GerritUsername != "alice" || out.Settings.GerritServer != "gerrit.example.com" || out.Settings.BaseGitDir != "/tmp/git" {
 		t.Fatalf("gerrit settings mismatch: %+v", out.Settings)
 	}
@@ -193,6 +200,34 @@ func TestSaveLoadPreservesDisabledBulkConfirmation(t *testing.T) {
 
 	if out.Settings.BulkConfirmation {
 		t.Fatal("bulk confirmation should remain false after reload")
+	}
+}
+
+func TestSaveLoadPreservesDisabledOpenShellInNewWindow(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.json")
+	s := &Store{path: path}
+
+	in := State{
+		Settings: Settings{
+			ShowRepoInfo:         true,
+			BulkConfirmation:     true,
+			OpenShellInNewWindow: false,
+		},
+	}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+
+	if out.Settings.OpenShellInNewWindow {
+		t.Fatal("open shell in new window should remain false after reload")
 	}
 }
 

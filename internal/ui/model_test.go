@@ -70,6 +70,17 @@ func TestSettingsDialogShowsBulkConfirmation(t *testing.T) {
 	}
 }
 
+func TestSettingsDialogShowsOpenShellInNewWindow(t *testing.T) {
+	m := NewModel()
+	m.settingsDraft.OpenShellInNewWindow = true
+
+	view := m.settingsDialogView(80, 10)
+
+	if !strings.Contains(view, "[x] Open Shell In New Window") {
+		t.Fatalf("expected open shell in new window setting in view, got %q", view)
+	}
+}
+
 func TestShouldConfirmBulkGitActionUsesSetting(t *testing.T) {
 	repos := []store.Repo{
 		{Name: "one", Path: "/tmp/one"},
@@ -141,5 +152,71 @@ func TestCycleLayoutModeCyclesThroughThreeStates(t *testing.T) {
 	m.cycleLayoutMode()
 	if m.layoutMode != layoutNormal {
 		t.Fatalf("third cycle layoutMode = %v, want %v", m.layoutMode, layoutNormal)
+	}
+}
+
+func TestRepoShellProcessUsesShellEnvAndRepoDir(t *testing.T) {
+	t.Setenv("SHELL", "/usr/bin/bash")
+
+	cmd, shellName, err := repoShellProcess("/tmp/repo-one")
+	if err != nil {
+		t.Fatalf("repoShellProcess returned error: %v", err)
+	}
+	if shellName != "bash" {
+		t.Fatalf("shellName = %q, want bash", shellName)
+	}
+	if cmd.Path != "/usr/bin/bash" {
+		t.Fatalf("cmd.Path = %q, want /usr/bin/bash", cmd.Path)
+	}
+	if cmd.Dir != "/tmp/repo-one" {
+		t.Fatalf("cmd.Dir = %q, want /tmp/repo-one", cmd.Dir)
+	}
+}
+
+func TestPowerShellDetection(t *testing.T) {
+	for _, shell := range []string{"pwsh", "pwsh.exe", "powershell", "powershell.exe"} {
+		if !isPowerShell(shell) {
+			t.Fatalf("expected %q to be detected as PowerShell", shell)
+		}
+		if got := shellDisplayName(shell); got != "PowerShell" {
+			t.Fatalf("shellDisplayName(%q) = %q, want PowerShell", shell, got)
+		}
+	}
+}
+
+func TestRepoShellProcessAddsPowerShellNoLogoFlag(t *testing.T) {
+	t.Setenv("SHELL", "pwsh.exe")
+
+	cmd, shellName, err := repoShellProcess("/tmp/repo-one")
+	if err != nil {
+		t.Fatalf("repoShellProcess returned error: %v", err)
+	}
+	if shellName != "PowerShell" {
+		t.Fatalf("shellName = %q, want PowerShell", shellName)
+	}
+	if len(cmd.Args) != 2 || cmd.Args[1] != "-NoLogo" {
+		t.Fatalf("cmd.Args = %#v, want PowerShell with -NoLogo", cmd.Args)
+	}
+}
+
+func TestRepoShellWindowProcessUsesWindowsStartForPowerShell(t *testing.T) {
+	t.Setenv("SHELL", "pwsh.exe")
+
+	cmd, shellName, err := repoShellWindowProcess(`C:\src\repo-one`, "windows")
+	if err != nil {
+		t.Fatalf("repoShellWindowProcess returned error: %v", err)
+	}
+	if shellName != "PowerShell" {
+		t.Fatalf("shellName = %q, want PowerShell", shellName)
+	}
+	if cmd.Path != "cmd.exe" {
+		t.Fatalf("cmd.Path = %q, want cmd.exe", cmd.Path)
+	}
+	wantArgs := []string{"cmd.exe", "/C", "start", "", "pwsh.exe", "-NoLogo"}
+	if strings.Join(cmd.Args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, wantArgs)
+	}
+	if cmd.Dir != `C:\src\repo-one` {
+		t.Fatalf("cmd.Dir = %q, want repo path", cmd.Dir)
 	}
 }

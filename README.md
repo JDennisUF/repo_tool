@@ -11,6 +11,7 @@ Terminal UI utility for tracking many Git repositories and running actions acros
 - Select visible repositories (`a`) and deselect all (`A`)
 - Pull all selected repositories (`p`)
 - Fetch selected repositories, or the highlighted repository if none are selected (`h`)
+- Open a new shell window in the highlighted repository (`!`)
 - Open lazygit in highlighted repository (`z`)
 - Open highlighted repository in VS Code (`v`) or Zed (`Z`)
 - Favorites lists, filtering, and batch actions
@@ -48,6 +49,7 @@ go build -o rt ./cmd/rt
 - `p`: pull selected repos, or the highlighted repo if none are selected
 - `c`: clone selected uncloned Gerrit repos, or the highlighted repo if none are selected
 - `h`: fetch selected repos, or the highlighted repo if none are selected
+- `!`: open a shell in the highlighted repo
 - `z`: launch lazygit on highlighted repo
 - `v`: launch VS Code on highlighted repo
 - `Z`: launch Zed on highlighted repo
@@ -115,4 +117,6 @@ The `background` value controls the full app canvas, including otherwise empty t
 - Pull uses `git pull --ff-only` for safer batch updates.
 - Fetch uses `git fetch --all --prune`.
 - Clone uses `git clone <remote> <path>`.
+- Shell launch uses `$SHELL` when set; on Windows it falls back through PowerShell and `cmd.exe`.
+- By default `!` opens a new terminal window. Disable Open Shell In New Window in settings to use the current terminal session instead.
 - `lazygit` must be installed and in `PATH` for `z` to work.

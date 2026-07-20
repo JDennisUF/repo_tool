@@ -95,6 +95,20 @@ type lazygitExitedMsg struct {
 	path string
 }
 
+type repoShellExitedMsg struct {
+	err      error
+	shell    string
+	repoName string
+	path     string
+}
+
+type repoShellOpenedMsg struct {
+	err      error
+	shell    string
+	repoName string
+	path     string
+}
+
 type vscodeOpenedMsg struct {
 	editor   string
 	repoName string
@@ -431,6 +445,34 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		} else {
 			m.status = "Returned from lazygit"
 			m.logInfo("lazygit: session ended")
+		}
+		return m, nil
+
+	case repoShellExitedMsg:
+		if msg.path != "" {
+			for _, repo := range m.repos {
+				if m.repoKey(repo) == msg.path {
+					m.refreshRepoStatus(repo)
+					break
+				}
+			}
+		}
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s failed: %v", msg.shell, msg.err)
+			m.logError(strings.ToLower(msg.shell) + ": " + msg.err.Error())
+		} else {
+			m.status = fmt.Sprintf("Returned from %s", msg.shell)
+			m.logInfo(fmt.Sprintf("%s: session ended for %s", strings.ToLower(msg.shell), msg.repoName))
+		}
+		return m, nil
+
+	case repoShellOpenedMsg:
+		if msg.err != nil {
+			m.status = fmt.Sprintf("%s failed: %v", msg.shell, msg.err)
+			m.logError(strings.ToLower(msg.shell) + ": " + msg.err.Error())
+		} else {
+			m.status = fmt.Sprintf("Opened %s: %s", msg.shell, msg.repoName)
+			m.logInfo(fmt.Sprintf("%s: opened %s (%s)", strings.ToLower(msg.shell), msg.repoName, msg.path))
 		}
 		return m, nil
 
@@ -774,6 +816,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.scrollToBottom(m.outPanelHeight())
 			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
 				return lazygitExitedMsg{err: err, path: m.repoKey(repo)}
+			})
+		case "!":
+			idx, ok := m.currentRepoIndex()
+			if !ok {
+				m.status = "No repository highlighted"
+				return m, nil
+			}
+			repo := m.repos[idx]
+			if !m.hasLocalRepo(repo) {
+				m.status = fmt.Sprintf("Repository not cloned: %s", repo.Name)
+				return m, nil
+			}
+			if m.settings.OpenShellInNewWindow {
+				m.status = fmt.Sprintf("Opening shell window: %s", repo.Name)
+				m.logInfo(fmt.Sprintf("shell: opening window for %s (%s)", repo.Name, repo.Path))
+				m.scrollToBottom(m.outPanelHeight())
+				return m, openRepoShellWindowCmd(repo)
+			}
+			cmd, shellName, err := repoShellProcess(repo.Path)
+			if err != nil {
+				m.status = fmt.Sprintf("Shell unavailable: %v", err)
+				m.logError("shell: " + err.Error())
+				return m, nil
+			}
+			cmd.Stdin = os.Stdin
+			cmd.Stdout = os.Stdout
+			cmd.Stderr = os.Stderr
+			m.status = fmt.Sprintf("Opening %s: %s", shellName, repo.Name)
+			m.logInfo(fmt.Sprintf("%s: opening %s (%s)", strings.ToLower(shellName), repo.Name, repo.Path))
+			m.scrollToBottom(m.outPanelHeight())
+			return m, tea.ExecProcess(cmd, func(err error) tea.Msg {
+				return repoShellExitedMsg{err: err, shell: shellName, repoName: repo.Name, path: m.repoKey(repo)}
 			})
 		case "v":
 			idx, ok := m.currentRepoIndex()
@@ -1423,7 +1497,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  ! shell  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	if m.layoutMode == layoutReposMaximized {
@@ -1456,7 +1530,7 @@ func (m Model) View() string {
 			Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 		keys := m.fgStyle(m.theme.Muted).
 			Width(max(1, m.width)).
-			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+			Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  ! shell  z lazygit  v code  Z zed  ? help  q quit")
 		return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 	}
 	topH := bodyH
@@ -1528,7 +1602,7 @@ func (m Model) View() string {
 		Render(" Status: " + m.status + " [" + busy + "] theme=" + m.themeName + " favorites=" + m.activeFavoriteList)
 	keys := m.fgStyle(m.theme.Muted).
 		Width(max(1, m.width)).
-		Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  z lazygit  v code  Z zed  ? help  q quit")
+		Render(" [0]/[1] focus  /=search  Enter=cycle layout  left/right cycle panels  +=repo info  f filter  F favorite  g gerrit  c clone  h fetch  l lists  S settings  r/R refresh  T themes  j/k move/scroll  space toggle  a/A sel/desel  o add  s scan  p pull  x remove  ! shell  z lazygit  v code  Z zed  ? help  q quit")
 	return m.renderApp(lipgloss.JoinVertical(lipgloss.Left, body, status, keys))
 }
 
@@ -1766,6 +1840,7 @@ func (m Model) settingsDialogView(width int, rows int) string {
 		{label: "Show Git Commands", value: boolSettingValue(m.settingsDraft.ShowGitCommands), isBool: true},
 		{label: "Show Repo Info", value: boolSettingValue(m.settingsDraft.ShowRepoInfo), isBool: true},
 		{label: "Bulk Confirmation", value: boolSettingValue(m.settingsDraft.BulkConfirmation), isBool: true},
+		{label: "Open Shell In New Window", value: boolSettingValue(m.settingsDraft.OpenShellInNewWindow), isBool: true},
 		{label: "Gerrit Username", value: fallbackValue(m.settingsDraft.GerritUsername, "(unset)")},
 		{label: "Gerrit Server", value: fallbackValue(m.settingsDraft.GerritServer, "(unset)")},
 		{label: "Base Git Directory", value: fallbackValue(m.settingsDraft.BaseGitDir, "(unset)")},
@@ -1970,6 +2045,7 @@ func (m Model) helpView(width int) string {
 		"  s               Scan repos",
 		"  p               Pull selected or highlighted",
 		"  x               Remove repo",
+		"  !               Open shell in repo",
 		"  z               Open lazygit",
 		"  v               Open VS Code",
 		"  Z               Open Zed",
@@ -2239,11 +2315,11 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			value := strings.TrimSpace(m.textInput.Value())
 			switch m.settingsCursor {
-			case 3:
-				m.settingsDraft.GerritUsername = value
 			case 4:
-				m.settingsDraft.GerritServer = value
+				m.settingsDraft.GerritUsername = value
 			case 5:
+				m.settingsDraft.GerritServer = value
+			case 6:
 				m.settingsDraft.BaseGitDir = value
 			}
 			m.settingsEditing = false
@@ -2272,11 +2348,11 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.toggleCurrentSetting()
 	case "enter":
-		if m.settingsCursor <= 2 {
+		if m.settingsCursor <= 3 {
 			m.toggleCurrentSetting()
 			return m, nil
 		}
-		if m.settingsCursor >= 3 && m.settingsCursor <= 5 {
+		if m.settingsCursor >= 4 && m.settingsCursor <= 6 {
 			m.settingsEditing = true
 			m.textInput.SetValue(m.currentSettingsFieldValue())
 			m.textInput.Focus()
@@ -2536,7 +2612,7 @@ func (m *Model) finishRepoOpBatch() {
 }
 
 func (m *Model) moveSettingsCursor(delta int) {
-	const settingsCount = 7
+	const settingsCount = 8
 	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
 }
 
@@ -2580,16 +2656,23 @@ func (m *Model) toggleCurrentSetting() {
 		} else {
 			m.status = "Will disable: bulk confirmations"
 		}
+	case 3:
+		m.settingsDraft.OpenShellInNewWindow = !m.settingsDraft.OpenShellInNewWindow
+		if m.settingsDraft.OpenShellInNewWindow {
+			m.status = "Will enable: open shell in new window"
+		} else {
+			m.status = "Will disable: open shell in new window"
+		}
 	}
 }
 
 func (m Model) currentSettingsFieldValue() string {
 	switch m.settingsCursor {
-	case 3:
-		return m.settingsDraft.GerritUsername
 	case 4:
-		return m.settingsDraft.GerritServer
+		return m.settingsDraft.GerritUsername
 	case 5:
+		return m.settingsDraft.GerritServer
+	case 6:
 		return m.settingsDraft.BaseGitDir
 	default:
 		return ""
@@ -3689,6 +3772,132 @@ func openEditorCmd(editor string, executable string, repo store.Repo) tea.Cmd {
 			err:      err,
 		}
 	}
+}
+
+func openRepoShellWindowCmd(repo store.Repo) tea.Cmd {
+	return func() tea.Msg {
+		cmd, shellName, err := repoShellWindowProcess(repo.Path, runtime.GOOS)
+		if err == nil {
+			err = cmd.Start()
+		}
+		if err == nil {
+			err = cmd.Process.Release()
+		}
+		return repoShellOpenedMsg{
+			err:      err,
+			shell:    fallbackValue(shellName, "shell"),
+			repoName: repo.Name,
+			path:     store.RepoKey(repo),
+		}
+	}
+}
+
+func repoShellWindowProcess(repoPath string, goos string) (*exec.Cmd, string, error) {
+	shellPath, shellName, err := preferredShell()
+	if err != nil {
+		return nil, "", err
+	}
+
+	switch goos {
+	case "windows":
+		args := []string{"/C", "start", "", shellPath}
+		if isPowerShell(shellPath) {
+			args = append(args, "-NoLogo")
+		}
+		cmd := exec.Command("cmd.exe", args...)
+		cmd.Dir = repoPath
+		return cmd, shellName, nil
+	case "darwin":
+		openPath, err := exec.LookPath("open")
+		if err != nil {
+			return nil, "", fmt.Errorf("open terminal: %w", err)
+		}
+		cmd := exec.Command(openPath, "-a", "Terminal", repoPath)
+		return cmd, "Terminal", nil
+	default:
+		return unixTerminalProcess(repoPath, shellPath, shellName)
+	}
+}
+
+func unixTerminalProcess(repoPath string, shellPath string, shellName string) (*exec.Cmd, string, error) {
+	candidates := []struct {
+		executable string
+		args       []string
+	}{
+		{executable: "x-terminal-emulator", args: []string{"-e", shellPath}},
+		{executable: "gnome-terminal", args: []string{"--working-directory", repoPath, "--", shellPath}},
+		{executable: "konsole", args: []string{"--workdir", repoPath, "-e", shellPath}},
+		{executable: "xfce4-terminal", args: []string{"--working-directory", repoPath, "-e", shellPath}},
+		{executable: "xterm", args: []string{"-e", shellPath}},
+	}
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate.executable)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, candidate.args...)
+		cmd.Dir = repoPath
+		return cmd, shellName, nil
+	}
+	return nil, "", fmt.Errorf("no supported terminal emulator found")
+}
+
+func repoShellProcess(repoPath string) (*exec.Cmd, string, error) {
+	shellPath, shellName, err := preferredShell()
+	if err != nil {
+		return nil, "", err
+	}
+
+	cmd := exec.Command(shellPath)
+	if isPowerShell(shellPath) {
+		cmd.Args = append(cmd.Args, "-NoLogo")
+	}
+	cmd.Dir = repoPath
+	return cmd, shellName, nil
+}
+
+func preferredShell() (string, string, error) {
+	if shell := strings.TrimSpace(os.Getenv("SHELL")); shell != "" {
+		return shell, shellDisplayName(shell), nil
+	}
+
+	candidates := []string{"bash", "sh"}
+	if runtime.GOOS == "windows" {
+		candidates = []string{"pwsh", "powershell.exe"}
+		if comspec := strings.TrimSpace(os.Getenv("COMSPEC")); comspec != "" {
+			candidates = append(candidates, comspec)
+		}
+		candidates = append(candidates, "cmd.exe")
+	}
+
+	for _, candidate := range candidates {
+		path, err := exec.LookPath(candidate)
+		if err == nil {
+			return path, shellDisplayName(candidate), nil
+		}
+	}
+	return "", "", fmt.Errorf("no supported shell found")
+}
+
+func shellDisplayName(shellPath string) string {
+	name := strings.TrimSuffix(filepath.Base(shellPath), filepath.Ext(shellPath))
+	switch strings.ToLower(name) {
+	case "pwsh", "powershell":
+		return "PowerShell"
+	case "cmd":
+		return "cmd"
+	case "bash":
+		return "bash"
+	case "sh":
+		return "sh"
+	default:
+		return name
+	}
+}
+
+func isPowerShell(shellPath string) bool {
+	name := strings.ToLower(strings.TrimSuffix(filepath.Base(shellPath), filepath.Ext(shellPath)))
+	return name == "pwsh" || name == "powershell"
 }
 
 func expandPath(path string) (string, error) {
