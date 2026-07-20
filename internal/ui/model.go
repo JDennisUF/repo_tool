@@ -3750,7 +3750,7 @@ func (m Model) indentBody(body string, width int) string {
 			lines[i] = prefix
 			continue
 		}
-		lines[i] = prefix + styledTrimRight(line, width-paddingWidth)
+		lines[i] = prefix + styledClipRight(line, width-paddingWidth)
 	}
 	if len(lines) == 0 {
 		return m.bgStyle().Render(strings.Repeat(" ", width))
@@ -3769,6 +3769,16 @@ func styledTrimRight(s string, width int) string {
 		return truncate.String(s, uint(width))
 	}
 	return truncate.StringWithTail(s, uint(width), "...")
+}
+
+func styledClipRight(s string, width int) string {
+	if width <= 0 {
+		return ""
+	}
+	if lipgloss.Width(s) <= width {
+		return s
+	}
+	return lipgloss.NewStyle().MaxWidth(width).Render(s)
 }
 
 func formatLastUpdated(value string) string {

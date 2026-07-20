@@ -18,6 +18,27 @@ func TestLabelValueUsesFullAvailableValueWidth(t *testing.T) {
 	}
 }
 
+func TestRepoInfoPanelDoesNotEllipsizePaddedLines(t *testing.T) {
+	m := NewModel()
+	m.repos = []store.Repo{
+		{
+			Name:          "repo-one",
+			Path:          "/tmp/repo-one",
+			GerritProject: "project-one",
+			RemoteURL:     "origin",
+		},
+	}
+	m.activeFavoriteList = defaultFavoriteListName
+	m.cursor = 0
+
+	body := m.buildRepoInfoContent(38, 6)
+	panel := m.renderSection(-1, "Repo Info", body, 40, 8, false)
+
+	if strings.Contains(panel, "...") {
+		t.Fatalf("repo info panel should not ellipsize padded lines, got %q", panel)
+	}
+}
+
 func TestBuildReposContentShowsActiveRepoMarker(t *testing.T) {
 	themes := loadThemeSet()
 	m := Model{
