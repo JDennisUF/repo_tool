@@ -47,6 +47,9 @@ func TestLoadMigratesLegacyRepoState(t *testing.T) {
 	if !state.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should default to true for legacy state")
 	}
+	if !state.Settings.BulkConfirmation {
+		t.Fatal("bulk confirmation should default to true for legacy state")
+	}
 	if state.Settings.GerritUsername != "" || state.Settings.GerritServer != "" || state.Settings.BaseGitDir != "" {
 		t.Fatalf("unexpected gerrit settings in legacy state: %+v", state.Settings)
 	}
@@ -71,11 +74,12 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 		ActiveFavoriteList: "work",
 		FavoritesOnly:      true,
 		Settings: Settings{
-			ShowGitCommands: true,
-			ShowRepoInfo:    true,
-			GerritUsername:  "alice",
-			GerritServer:    "gerrit.example.com",
-			BaseGitDir:      "/tmp/git",
+			ShowGitCommands:  true,
+			ShowRepoInfo:     true,
+			BulkConfirmation: true,
+			GerritUsername:   "alice",
+			GerritServer:     "gerrit.example.com",
+			BaseGitDir:       "/tmp/git",
 		},
 	}
 	if err := s.Save(in); err != nil {
@@ -130,6 +134,9 @@ func TestSaveLoadPreservesFavoriteLists(t *testing.T) {
 	if !out.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should persist")
 	}
+	if !out.Settings.BulkConfirmation {
+		t.Fatal("bulk confirmation should persist")
+	}
 	if out.Settings.GerritUsername != "alice" || out.Settings.GerritServer != "gerrit.example.com" || out.Settings.BaseGitDir != "/tmp/git" {
 		t.Fatalf("gerrit settings mismatch: %+v", out.Settings)
 	}
@@ -159,6 +166,33 @@ func TestSaveLoadPreservesDisabledRepoInfo(t *testing.T) {
 
 	if out.Settings.ShowRepoInfo {
 		t.Fatal("show repo info should remain false after reload")
+	}
+}
+
+func TestSaveLoadPreservesDisabledBulkConfirmation(t *testing.T) {
+	t.Parallel()
+
+	dir := t.TempDir()
+	path := filepath.Join(dir, "repos.json")
+	s := &Store{path: path}
+
+	in := State{
+		Settings: Settings{
+			ShowRepoInfo:     true,
+			BulkConfirmation: false,
+		},
+	}
+	if err := s.Save(in); err != nil {
+		t.Fatalf("save state: %v", err)
+	}
+
+	out, err := s.Load()
+	if err != nil {
+		t.Fatalf("reload state: %v", err)
+	}
+
+	if out.Settings.BulkConfirmation {
+		t.Fatal("bulk confirmation should remain false after reload")
 	}
 }
 

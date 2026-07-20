@@ -637,7 +637,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				targets = []store.Repo{m.repos[idx]}
 				scope = "highlighted repository"
 			}
-			if len(targets) > 1 {
+			if m.shouldConfirmBulkGitAction(targets) {
 				m.openConfirmDialog(confirmActionFetch, targets)
 				return m, nil
 			}
@@ -664,7 +664,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				targets = []store.Repo{target}
 				scope = "highlighted repository"
 			}
-			if len(targets) > 1 {
+			if m.shouldConfirmBulkGitAction(targets) {
 				m.openConfirmDialog(confirmActionClone, targets)
 				return m, nil
 			}
@@ -728,7 +728,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 				selected = []store.Repo{m.repos[idx]}
 				scope = "highlighted repository"
 			}
-			if len(selected) > 1 {
+			if m.shouldConfirmBulkGitAction(selected) {
 				m.openConfirmDialog(confirmActionPull, selected)
 				return m, nil
 			}
@@ -1765,6 +1765,7 @@ func (m Model) settingsDialogView(width int, rows int) string {
 	}{
 		{label: "Show Git Commands", value: boolSettingValue(m.settingsDraft.ShowGitCommands), isBool: true},
 		{label: "Show Repo Info", value: boolSettingValue(m.settingsDraft.ShowRepoInfo), isBool: true},
+		{label: "Bulk Confirmation", value: boolSettingValue(m.settingsDraft.BulkConfirmation), isBool: true},
 		{label: "Gerrit Username", value: fallbackValue(m.settingsDraft.GerritUsername, "(unset)")},
 		{label: "Gerrit Server", value: fallbackValue(m.settingsDraft.GerritServer, "(unset)")},
 		{label: "Base Git Directory", value: fallbackValue(m.settingsDraft.BaseGitDir, "(unset)")},
@@ -2238,11 +2239,11 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		case "enter":
 			value := strings.TrimSpace(m.textInput.Value())
 			switch m.settingsCursor {
-			case 2:
-				m.settingsDraft.GerritUsername = value
 			case 3:
-				m.settingsDraft.GerritServer = value
+				m.settingsDraft.GerritUsername = value
 			case 4:
+				m.settingsDraft.GerritServer = value
+			case 5:
 				m.settingsDraft.BaseGitDir = value
 			}
 			m.settingsEditing = false
@@ -2271,11 +2272,11 @@ func (m Model) handleSettingsDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case " ":
 		m.toggleCurrentSetting()
 	case "enter":
-		if m.settingsCursor <= 1 {
+		if m.settingsCursor <= 2 {
 			m.toggleCurrentSetting()
 			return m, nil
 		}
-		if m.settingsCursor >= 2 && m.settingsCursor <= 4 {
+		if m.settingsCursor >= 3 && m.settingsCursor <= 5 {
 			m.settingsEditing = true
 			m.textInput.SetValue(m.currentSettingsFieldValue())
 			m.textInput.Focus()
@@ -2535,8 +2536,12 @@ func (m *Model) finishRepoOpBatch() {
 }
 
 func (m *Model) moveSettingsCursor(delta int) {
-	const settingsCount = 6
+	const settingsCount = 7
 	m.settingsCursor = (m.settingsCursor + delta + settingsCount) % settingsCount
+}
+
+func (m Model) shouldConfirmBulkGitAction(repos []store.Repo) bool {
+	return m.settings.BulkConfirmation && len(repos) > 1
 }
 
 func repoActionLabel(kind repoActionKind) string {
@@ -2568,16 +2573,23 @@ func (m *Model) toggleCurrentSetting() {
 		} else {
 			m.status = "Will disable: show repo info"
 		}
+	case 2:
+		m.settingsDraft.BulkConfirmation = !m.settingsDraft.BulkConfirmation
+		if m.settingsDraft.BulkConfirmation {
+			m.status = "Will enable: bulk confirmations"
+		} else {
+			m.status = "Will disable: bulk confirmations"
+		}
 	}
 }
 
 func (m Model) currentSettingsFieldValue() string {
 	switch m.settingsCursor {
-	case 2:
-		return m.settingsDraft.GerritUsername
 	case 3:
-		return m.settingsDraft.GerritServer
+		return m.settingsDraft.GerritUsername
 	case 4:
+		return m.settingsDraft.GerritServer
+	case 5:
 		return m.settingsDraft.BaseGitDir
 	default:
 		return ""
@@ -3182,6 +3194,10 @@ func (m Model) handleFavoritesDialog(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if len(repos) == 0 {
 			m.status = fmt.Sprintf("No cloned repositories in favorites list: %s", name)
 			m.logInfo("Pull: no cloned repositories in favorites list: " + name)
+			return m, nil
+		}
+		if m.shouldConfirmBulkGitAction(repos) {
+			m.openConfirmDialog(confirmActionPull, repos)
 			return m, nil
 		}
 		return m.startPull("favorites list "+name, repos)

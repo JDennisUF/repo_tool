@@ -59,6 +59,36 @@ func TestBuildReposContentShowsActiveRepoMarker(t *testing.T) {
 	}
 }
 
+func TestSettingsDialogShowsBulkConfirmation(t *testing.T) {
+	m := NewModel()
+	m.settingsDraft.BulkConfirmation = true
+
+	view := m.settingsDialogView(80, 10)
+
+	if !strings.Contains(view, "[x] Bulk Confirmation") {
+		t.Fatalf("expected bulk confirmation setting in view, got %q", view)
+	}
+}
+
+func TestShouldConfirmBulkGitActionUsesSetting(t *testing.T) {
+	repos := []store.Repo{
+		{Name: "one", Path: "/tmp/one"},
+		{Name: "two", Path: "/tmp/two"},
+	}
+	m := Model{settings: store.Settings{BulkConfirmation: true}}
+	if !m.shouldConfirmBulkGitAction(repos) {
+		t.Fatal("expected bulk git action confirmation when setting is enabled")
+	}
+	if m.shouldConfirmBulkGitAction(repos[:1]) {
+		t.Fatal("did not expect git action confirmation for a single repo")
+	}
+
+	m.settings.BulkConfirmation = false
+	if m.shouldConfirmBulkGitAction(repos) {
+		t.Fatal("did not expect bulk git action confirmation when setting is disabled")
+	}
+}
+
 func TestPullFinishedClearsActiveRepoMarkers(t *testing.T) {
 	themes := loadThemeSet()
 	m := Model{

@@ -631,6 +631,24 @@
       "input": "#001A00",
       "rowFocusBg": "#00CC00"
     },
+    "TRS-80 Model III": {
+      "background": "#000000",
+      "foreground": "#F2F2F2",
+      "muted": "#9A9A9A",
+      "border": "#6A6A6A",
+      "borderFocus": "#FFFFFF",
+      "header": "#FFFFFF",
+      "accent": "#E6E6E6",
+      "selection": "#FFFFFF",
+      "success": "#F2F2F2",
+      "error": "#D0D0D0",
+      "warning": "#E6E6E6",
+      "status": "#101010",
+      "statusText": "#F2F2F2",
+      "cursor": "#FFFFFF",
+      "input": "#FFFFFF",
+      "rowFocusBg": "#202020"
+    },
     "Velvet Neon": {
       "background": "#140A18",
       "foreground": "#F8EFFF",

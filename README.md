@@ -16,6 +16,7 @@ Terminal UI utility for tracking many Git repositories and running actions acros
 - Favorites lists, filtering, and batch actions
 - Search in repos, themes, and command output (`/`)
 - Settings dialog (`,` or `S`)
+- Optional confirmations for bulk git pull/fetch/clone actions
 - Gerrit settings for username, server, and base git directory
 - Gerrit project browser with a scrollable checkbox list for large `ls-projects` results
 - Clone tracked Gerrit repos on demand after tracking them
@@ -110,6 +111,7 @@ The `background` value controls the full app canvas, including otherwise empty t
 - Repositories are persisted at:
   - Linux: `~/.config/rt/repos.json`
 - Gerrit settings are stored in the same config file and are now editable from the settings dialog.
+- Bulk git action confirmations are controlled by the Bulk Confirmation setting.
 - Pull uses `git pull --ff-only` for safer batch updates.
 - Fetch uses `git fetch --all --prune`.
 - Clone uses `git clone <remote> <path>`.
