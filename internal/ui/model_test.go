@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -218,5 +219,64 @@ func TestRepoShellWindowProcessUsesWindowsStartForPowerShell(t *testing.T) {
 	}
 	if cmd.Dir != `C:\src\repo-one` {
 		t.Fatalf("cmd.Dir = %q, want repo path", cmd.Dir)
+	}
+}
+
+func TestWSLTerminalProcessPrefersWindowsTerminal(t *testing.T) {
+	cmd, err := wslTerminalProcess("/home/me/repo-one", "/bin/bash", fakeLookPath(map[string]string{
+		"wt.exe": "/mnt/c/Users/me/AppData/Local/Microsoft/WindowsApps/wt.exe",
+	}))
+	if err != nil {
+		t.Fatalf("wslTerminalProcess returned error: %v", err)
+	}
+
+	wantArgs := []string{
+		"/mnt/c/Users/me/AppData/Local/Microsoft/WindowsApps/wt.exe",
+		"new-tab",
+		"--title",
+		"repo-one",
+		"wsl.exe",
+		"--cd",
+		"/home/me/repo-one",
+		"--exec",
+		"/bin/bash",
+	}
+	if strings.Join(cmd.Args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, wantArgs)
+	}
+	if cmd.Dir != "/home/me/repo-one" {
+		t.Fatalf("cmd.Dir = %q, want repo path", cmd.Dir)
+	}
+}
+
+func TestWSLTerminalProcessFallsBackToWezTerm(t *testing.T) {
+	cmd, err := wslTerminalProcess("/home/me/repo-one", "/bin/bash", fakeLookPath(map[string]string{
+		"wezterm.exe": "/mnt/c/Program Files/WezTerm/wezterm.exe",
+	}))
+	if err != nil {
+		t.Fatalf("wslTerminalProcess returned error: %v", err)
+	}
+
+	wantArgs := []string{
+		"/mnt/c/Program Files/WezTerm/wezterm.exe",
+		"start",
+		"--",
+		"wsl.exe",
+		"--cd",
+		"/home/me/repo-one",
+		"--exec",
+		"/bin/bash",
+	}
+	if strings.Join(cmd.Args, "\x00") != strings.Join(wantArgs, "\x00") {
+		t.Fatalf("cmd.Args = %#v, want %#v", cmd.Args, wantArgs)
+	}
+}
+
+func fakeLookPath(paths map[string]string) func(string) (string, error) {
+	return func(file string) (string, error) {
+		if path, ok := paths[file]; ok {
+			return path, nil
+		}
+		return "", errors.New("not found")
 	}
 }

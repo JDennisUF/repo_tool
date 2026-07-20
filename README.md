@@ -118,5 +118,6 @@ The `background` value controls the full app canvas, including otherwise empty t
 - Fetch uses `git fetch --all --prune`.
 - Clone uses `git clone <remote> <path>`.
 - Shell launch uses `$SHELL` when set; on Windows it falls back through PowerShell and `cmd.exe`.
+- From WSL, new shell windows use Windows Terminal (`wt.exe`) or WezTerm (`wezterm.exe`) when available.
 - By default `!` opens a new terminal window. Disable Open Shell In New Window in settings to use the current terminal session instead.
 - `lazygit` must be installed and in `PATH` for `z` to work.

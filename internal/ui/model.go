@@ -3793,6 +3793,10 @@ func openRepoShellWindowCmd(repo store.Repo) tea.Cmd {
 }
 
 func repoShellWindowProcess(repoPath string, goos string) (*exec.Cmd, string, error) {
+	return repoShellWindowProcessWithLookPath(repoPath, goos, exec.LookPath)
+}
+
+func repoShellWindowProcessWithLookPath(repoPath string, goos string, lookPath func(string) (string, error)) (*exec.Cmd, string, error) {
 	shellPath, shellName, err := preferredShell()
 	if err != nil {
 		return nil, "", err
@@ -3808,18 +3812,43 @@ func repoShellWindowProcess(repoPath string, goos string) (*exec.Cmd, string, er
 		cmd.Dir = repoPath
 		return cmd, shellName, nil
 	case "darwin":
-		openPath, err := exec.LookPath("open")
+		openPath, err := lookPath("open")
 		if err != nil {
 			return nil, "", fmt.Errorf("open terminal: %w", err)
 		}
 		cmd := exec.Command(openPath, "-a", "Terminal", repoPath)
 		return cmd, "Terminal", nil
 	default:
-		return unixTerminalProcess(repoPath, shellPath, shellName)
+		if isWSL() {
+			if cmd, err := wslTerminalProcess(repoPath, shellPath, lookPath); err == nil {
+				return cmd, shellName, nil
+			}
+		}
+		return unixTerminalProcess(repoPath, shellPath, shellName, lookPath)
 	}
 }
 
-func unixTerminalProcess(repoPath string, shellPath string, shellName string) (*exec.Cmd, string, error) {
+func wslTerminalProcess(repoPath string, shellPath string, lookPath func(string) (string, error)) (*exec.Cmd, error) {
+	candidates := []struct {
+		executable string
+		args       []string
+	}{
+		{executable: "wt.exe", args: []string{"new-tab", "--title", filepath.Base(repoPath), "wsl.exe", "--cd", repoPath, "--exec", shellPath}},
+		{executable: "wezterm.exe", args: []string{"start", "--", "wsl.exe", "--cd", repoPath, "--exec", shellPath}},
+	}
+	for _, candidate := range candidates {
+		path, err := lookPath(candidate.executable)
+		if err != nil {
+			continue
+		}
+		cmd := exec.Command(path, candidate.args...)
+		cmd.Dir = repoPath
+		return cmd, nil
+	}
+	return nil, fmt.Errorf("no supported WSL terminal launcher found")
+}
+
+func unixTerminalProcess(repoPath string, shellPath string, shellName string, lookPath func(string) (string, error)) (*exec.Cmd, string, error) {
 	candidates := []struct {
 		executable string
 		args       []string
@@ -3831,7 +3860,7 @@ func unixTerminalProcess(repoPath string, shellPath string, shellName string) (*
 		{executable: "xterm", args: []string{"-e", shellPath}},
 	}
 	for _, candidate := range candidates {
-		path, err := exec.LookPath(candidate.executable)
+		path, err := lookPath(candidate.executable)
 		if err != nil {
 			continue
 		}
@@ -3840,6 +3869,18 @@ func unixTerminalProcess(repoPath string, shellPath string, shellName string) (*
 		return cmd, shellName, nil
 	}
 	return nil, "", fmt.Errorf("no supported terminal emulator found")
+}
+
+func isWSL() bool {
+	if strings.TrimSpace(os.Getenv("WSL_DISTRO_NAME")) != "" || strings.TrimSpace(os.Getenv("WSL_INTEROP")) != "" {
+		return true
+	}
+	data, err := os.ReadFile("/proc/sys/kernel/osrelease")
+	if err != nil {
+		return false
+	}
+	release := strings.ToLower(string(data))
+	return strings.Contains(release, "microsoft") || strings.Contains(release, "wsl")
 }
 
 func repoShellProcess(repoPath string) (*exec.Cmd, string, error) {
